@@ -244,7 +244,15 @@ def generate_for_setting(
 
     # Build and save detector graph
     graph = build_detector_graph(circuit, dem, include_boundary=True)
-    _write_graph(cfg, out_dir, graph, distance, rounds, p, overwrite)
+    _write_graph(
+        cfg,
+        out_dir=out_dir,
+        graph=graph,
+        distance=distance,
+        rounds=rounds,
+        p=p,
+        overwrite=overwrite,
+    )
 
     # Generate each split
     for split, n_samples in cfg.num_samples.items():
@@ -258,14 +266,14 @@ def generate_for_setting(
         )
         _generate_split(
             cfg,
-            out_dir,
-            circuit,
-            dem,
-            split,
-            n_samples,
-            split_seed,
-            overwrite,
-            show_progress,
+            out_dir=out_dir,
+            circuit=circuit,
+            dem=dem,
+            split=split,
+            n_samples=n_samples,
+            seed=split_seed,
+            overwrite=overwrite,
+            show_progress=show_progress,
         )
 
 
@@ -304,11 +312,11 @@ def generate_raw_data(
     for d, r, p in tqdm(settings, desc="Settings"):
         generate_for_setting(
             cfg,
-            d,
-            r,
-            p,
-            overwrite,
-            save_artifacts,
+            distance=d,
+            rounds=r,
+            p=p,
+            overwrite=overwrite,
+            save_artifacts=save_artifacts,
             show_progress=True,
         )
 
