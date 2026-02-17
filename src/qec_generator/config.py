@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterator, Tuple
 
 import yaml
 
-from qec_generator._constants import DEFAULT_CHUNK_SIZE, DEFAULT_COMPRESS
+from constants import DEFAULT_CHUNK_SIZE, DEFAULT_COMPRESS
 
 
 logger = logging.getLogger(__name__)
