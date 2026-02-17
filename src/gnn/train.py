@@ -114,8 +114,15 @@ class TrainConfig:
         flat: Dict[str, Any] = {}
 
         # Top-level scalars
-        for key in ("case", "datasets_dir", "output_dir", "num_workers",
-                     "edge_pos_weight", "seed", "max_samples"):
+        for key in (
+            "case",
+            "datasets_dir",
+            "output_dir",
+            "num_workers",
+            "edge_pos_weight",
+            "seed",
+            "max_samples",
+        ):
             if key in raw:
                 flat[key] = raw[key]
 
@@ -457,9 +464,7 @@ def load_checkpoint(
     if scheduler is not None and "scheduler_state_dict" in ckpt:
         scheduler.load_state_dict(ckpt["scheduler_state_dict"])  # type: ignore[attr-defined]
 
-    logger.info(
-        "Loaded checkpoint from %s (epoch %d)", path, ckpt.get("epoch", -1)
-    )
+    logger.info("Loaded checkpoint from %s (epoch %d)", path, ckpt.get("epoch", -1))
     return {
         "epoch": ckpt.get("epoch", 0),
         "best_metric": ckpt.get("best_metric", float("inf")),
@@ -527,15 +532,20 @@ def train(cfg: TrainConfig) -> Path:
     logger.info("Loading datasets from %s (case=%s)", cfg.datasets_dir, cfg.case)
 
     train_ds = MixedSurfaceCodeDataset(
-        datasets_dir=cfg.datasets_dir, case=cfg.case, split="train"
+        datasets_dir=cfg.datasets_dir,
+        case=cfg.case,
+        split="train",
     )
     val_ds = MixedSurfaceCodeDataset(
-        datasets_dir=cfg.datasets_dir, case=cfg.case, split="val"
+        datasets_dir=cfg.datasets_dir,
+        case=cfg.case,
+        split="val",
     )
 
     # Optional sample cap for fast iteration
     if cfg.max_samples is not None:
         from torch.utils.data import Subset
+
         train_ds = Subset(train_ds, range(min(cfg.max_samples, len(train_ds))))
         val_ds = Subset(val_ds, range(min(cfg.max_samples // 5, len(val_ds))))
 
@@ -571,10 +581,12 @@ def train(cfg: TrainConfig) -> Path:
 
     # ── Optimizer + scheduler ─────────────────────────────────────
 
-    optimizer = AdamW(
-        model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
+    optimizer = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=cfg.epochs,
+        eta_min=cfg.lr / 50,
     )
-    scheduler = CosineAnnealingLR(optimizer, T_max=cfg.epochs, eta_min=cfg.lr / 50)
 
     # ── Loss ──────────────────────────────────────────────────────
 
@@ -582,7 +594,11 @@ def train(cfg: TrainConfig) -> Path:
     if cfg.case != "logical_head" and pos_weight is None:
         pos_weight = _estimate_edge_pos_weight(train_loader)
 
-    criterion = build_criterion(cfg.case, pos_weight=pos_weight, device=device)
+    criterion = build_criterion(
+        cfg.case,
+        pos_weight=pos_weight,
+        device=device,
+    )
 
     # ── Resume ────────────────────────────────────────────────────
 
@@ -593,7 +609,9 @@ def train(cfg: TrainConfig) -> Path:
         ckpt_info = load_checkpoint(cfg.resume, model, optimizer, scheduler)
         start_epoch = ckpt_info["epoch"] + 1
         best_metric = ckpt_info["best_metric"]
-        logger.info("Resuming from epoch %d (best_metric=%.6f)", start_epoch, best_metric)
+        logger.info(
+            "Resuming from epoch %d (best_metric=%.6f)", start_epoch, best_metric
+        )
 
     # ── Save config ───────────────────────────────────────────────
 
@@ -602,7 +620,10 @@ def train(cfg: TrainConfig) -> Path:
     config_dict["datasets_dir"] = str(cfg.datasets_dir)
     config_dict["output_dir"] = str(cfg.output_dir)
     config_dict["resume"] = str(cfg.resume) if cfg.resume else None
-    config_path.write_text(json.dumps(config_dict, indent=2), encoding="utf-8")
+    config_path.write_text(
+        json.dumps(config_dict, indent=2),
+        encoding="utf-8",
+    )
 
     # ── Training loop ─────────────────────────────────────────────
 
@@ -618,9 +639,7 @@ def train(cfg: TrainConfig) -> Path:
         train_metrics = train_one_epoch(
             model, train_loader, criterion, optimizer, device, cfg.case
         )
-        val_metrics = validate(
-            model, val_loader, criterion, device, cfg.case
-        )
+        val_metrics = validate(model, val_loader, criterion, device, cfg.case)
 
         scheduler.step()
         elapsed = time.perf_counter() - t0
@@ -632,15 +651,19 @@ def train(cfg: TrainConfig) -> Path:
         if improved:
             best_metric = current
             save_checkpoint(
-                best_path, model, optimizer, scheduler,
-                epoch, best_metric, cfg,
+                best_path,
+                model,
+                optimizer,
+                scheduler,
+                epoch,
+                best_metric,
+                cfg,
             )
 
         # Log
         marker = " *" if improved else ""
         logger.info(
-            "Epoch %3d/%d [%.1fs, lr=%.1e]  "
-            "train: %s  val: %s%s",
+            "Epoch %3d/%d [%.1fs, lr=%.1e]  " "train: %s  val: %s%s",
             epoch + 1,
             cfg.epochs,
             elapsed,

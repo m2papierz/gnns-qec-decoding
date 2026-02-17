@@ -64,7 +64,8 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
     )
 
     parser.add_argument(
-        "-c", "--config",
+        "-c",
+        "--config",
         type=Path,
         default=None,
         help="YAML config file (CLI args override config values)",
@@ -94,7 +95,9 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
 
     # Edge-case specific
     parser.add_argument(
-        "--edge-pos-weight", type=float, default=None,
+        "--edge-pos-weight",
+        type=float,
+        default=None,
         help="pos_weight for edge BCE (auto-estimated if omitted)",
     )
 
@@ -102,7 +105,9 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument(
-        "--max-samples", type=int, default=None,
+        "--max-samples",
+        type=int,
+        default=None,
         help="Cap training samples (val capped at max_samples//5)",
     )
     parser.add_argument("-v", "--verbose", action="store_true")

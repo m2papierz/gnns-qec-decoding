@@ -114,7 +114,12 @@ class TestQECDecoder:
 
     @pytest.mark.parametrize("case", ["logical_head", "mwpm_teacher", "hybrid"])
     def test_forward_runs(self, case: str, batched: Batch) -> None:
-        model = build_model(case, hidden_dim=32, num_layers=2, dropout=0.0)
+        model = build_model(
+            case,
+            hidden_dim=32,
+            num_layers=2,
+            dropout=0.0,
+        )
         model.eval()
         with torch.no_grad():
             logits = model(batched)
@@ -123,7 +128,10 @@ class TestQECDecoder:
 
     def test_logical_head_output_shape(self, batched: Batch) -> None:
         model = build_model(
-            "logical_head", hidden_dim=32, num_layers=2, dropout=0.0
+            "logical_head",
+            hidden_dim=32,
+            num_layers=2,
+            dropout=0.0,
         )
         model.eval()
         with torch.no_grad():
@@ -133,7 +141,10 @@ class TestQECDecoder:
 
     def test_edge_head_output_shape(self, batched: Batch) -> None:
         model = build_model(
-            "mwpm_teacher", hidden_dim=32, num_layers=2, dropout=0.0
+            "mwpm_teacher",
+            hidden_dim=32,
+            num_layers=2,
+            dropout=0.0,
         )
         model.eval()
         with torch.no_grad():
@@ -153,7 +164,10 @@ class TestQECDecoder:
 
     def test_backward_pass(self, batched: Batch) -> None:
         model = build_model(
-            "logical_head", hidden_dim=32, num_layers=2, dropout=0.0
+            "logical_head",
+            hidden_dim=32,
+            num_layers=2,
+            dropout=0.0,
         )
         logits = model(batched)
         logits.sum().backward()
@@ -174,14 +188,21 @@ class TestBuildModel:
 
     def test_encoder_config_propagates(self) -> None:
         model = build_model(
-            "logical_head", hidden_dim=64, num_layers=4, node_dim=3
+            "logical_head",
+            hidden_dim=64,
+            num_layers=4,
+            node_dim=3,
         )
         assert model.encoder.hidden_dim == 64
         assert model.encoder.num_layers == 4
         assert model.encoder.node_dim == 3
 
     def test_logical_head_observables(self) -> None:
-        model = build_model("logical_head", hidden_dim=32, num_observables=5)
+        model = build_model(
+            "logical_head",
+            hidden_dim=32,
+            num_observables=5,
+        )
         assert isinstance(model.head, LogicalHead)
 
     @pytest.mark.parametrize("case", ["mwpm_teacher", "hybrid"])

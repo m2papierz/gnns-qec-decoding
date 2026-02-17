@@ -247,7 +247,12 @@ def evaluate_setting(
     setting_dir = cfg.setting_dir(distance, rounds, p)
 
     circuit = _load_or_build_circuit(
-        cfg, setting_dir, distance, rounds, p, regenerate=regenerate
+        cfg,
+        setting_dir,
+        distance,
+        rounds,
+        p,
+        regenerate=regenerate,
     )
     dem = circuit.detector_error_model(decompose_errors=True)
     matching = pymatching.Matching.from_detector_error_model(dem)

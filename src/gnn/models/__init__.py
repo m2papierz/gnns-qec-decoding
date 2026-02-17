@@ -8,6 +8,7 @@ from gnn.models.heads import (
     build_model,
 )
 
+
 __all__ = [
     "DetectorGraphEncoder",
     "EdgeHead",

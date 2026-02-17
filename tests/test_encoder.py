@@ -35,7 +35,9 @@ class TestOutputShapes:
     """Verify encoder produces correctly shaped embeddings."""
 
     def test_single_graph(
-        self, encoder: DetectorGraphEncoder, small_graph: Data
+        self,
+        encoder: DetectorGraphEncoder,
+        small_graph: Data,
     ) -> None:
         h = encoder(small_graph.x, small_graph.edge_index, small_graph.edge_attr)
         assert h.shape == (6, 32)
@@ -48,7 +50,9 @@ class TestOutputShapes:
         assert enc(x, ei, ea).shape == (10, 64)
 
     def test_batched_graphs(
-        self, encoder: DetectorGraphEncoder, small_graph: Data
+        self,
+        encoder: DetectorGraphEncoder,
+        small_graph: Data,
     ) -> None:
         batch = Batch.from_data_list([small_graph, small_graph, small_graph])
         h = encoder(batch.x, batch.edge_index, batch.edge_attr)
@@ -60,7 +64,9 @@ class TestGradients:
     """Verify gradients flow through the encoder."""
 
     def test_backward_pass(
-        self, encoder: DetectorGraphEncoder, small_graph: Data
+        self,
+        encoder: DetectorGraphEncoder,
+        small_graph: Data,
     ) -> None:
         h = encoder(small_graph.x, small_graph.edge_index, small_graph.edge_attr)
         loss = h.sum()
@@ -70,7 +76,9 @@ class TestGradients:
             assert param.grad is not None, f"No gradient for {name}"
 
     def test_node_features_receive_grad(
-        self, encoder: DetectorGraphEncoder, small_graph: Data
+        self,
+        encoder: DetectorGraphEncoder,
+        small_graph: Data,
     ) -> None:
         x = small_graph.x.clone().requires_grad_(True)
         h = encoder(x, small_graph.edge_index, small_graph.edge_attr)
@@ -91,7 +99,12 @@ class TestConfiguration:
         assert h.shape == (4, 16)
 
     def test_custom_input_dims(self) -> None:
-        enc = DetectorGraphEncoder(node_dim=3, edge_dim=5, hidden_dim=16, num_layers=2)
+        enc = DetectorGraphEncoder(
+            node_dim=3,
+            edge_dim=5,
+            hidden_dim=16,
+            num_layers=2,
+        )
         x = torch.randn(8, 3)
         ei = torch.randint(0, 8, (2, 12))
         ea = torch.randn(12, 5)
@@ -111,14 +124,12 @@ class TestDeterminism:
     """Verify reproducible outputs in eval mode."""
 
     def test_eval_deterministic(
-        self, encoder: DetectorGraphEncoder, small_graph: Data
+        self,
+        encoder: DetectorGraphEncoder,
+        small_graph: Data,
     ) -> None:
         encoder.eval()
         with torch.no_grad():
-            h1 = encoder(
-                small_graph.x, small_graph.edge_index, small_graph.edge_attr
-            )
-            h2 = encoder(
-                small_graph.x, small_graph.edge_index, small_graph.edge_attr
-            )
+            h1 = encoder(small_graph.x, small_graph.edge_index, small_graph.edge_attr)
+            h2 = encoder(small_graph.x, small_graph.edge_index, small_graph.edge_attr)
         assert torch.allclose(h1, h2)

@@ -306,7 +306,11 @@ def _build_batch(
             det = torch.cat([det, pad], dim=0)
 
         data_list.append(
-            Data(x=det, edge_index=edge_index, edge_attr=edge_attr)
+            Data(
+                x=det,
+                edge_index=edge_index,
+                edge_attr=edge_attr,
+            )
         )
 
     return Batch.from_data_list(data_list)
@@ -355,8 +359,13 @@ def _eval_logical_head(
     for off in range(0, n, batch_size):
         end = min(off + batch_size, n)
         batch = _build_batch(
-            syndrome, edge_index, edge_attr,
-            num_nodes, num_detectors, off, end,
+            syndrome,
+            edge_index,
+            edge_attr,
+            num_nodes,
+            num_detectors,
+            off,
+            end,
         )
         batch = batch.to(device)
 
@@ -497,8 +506,13 @@ def _eval_edge_case(
     for off in range(0, n, batch_size):
         end = min(off + batch_size, n)
         batch = _build_batch(
-            syndrome, edge_index, edge_attr,
-            num_nodes, num_detectors, off, end,
+            syndrome,
+            edge_index,
+            edge_attr,
+            num_nodes,
+            num_detectors,
+            off,
+            end,
         )
         batch = batch.to(device)
 
@@ -613,8 +627,8 @@ def evaluate_all(
         t0 = time.perf_counter()
 
         try:
-            edge_index, edge_attr, syndrome, logical, ei_np = (
-                _load_setting_data(datasets_dir, case, meta, split)
+            edge_index, edge_attr, syndrome, logical, ei_np = _load_setting_data(
+                datasets_dir, case, meta, split
             )
         except FileNotFoundError as exc:
             logger.warning(
@@ -658,9 +672,7 @@ def evaluate_all(
         elapsed = time.perf_counter() - t0
         ler = num_errors / num_shots if num_shots > 0 else 0.0
 
-        mwpm_ler = baseline.get(
-            (meta.distance, meta.rounds, meta.error_prob, split)
-        )
+        mwpm_ler = baseline.get((meta.distance, meta.rounds, meta.error_prob, split))
 
         report.results.append(
             SettingResult(
@@ -703,10 +715,7 @@ def print_report(report: EvalReport) -> None:
             f"{'shots':>7} {'GNN_LER':>10} {'MWPM_LER':>10} {'delta':>8}"
         )
     else:
-        header = (
-            f"{'d':>3} {'r':>4} {'p':>9} "
-            f"{'shots':>7} {'GNN_LER':>10}"
-        )
+        header = f"{'d':>3} {'r':>4} {'p':>9} " f"{'shots':>7} {'GNN_LER':>10}"
 
     sep = "-" * len(header)
 
@@ -716,9 +725,7 @@ def print_report(report: EvalReport) -> None:
     print(header)
     print(sep)
 
-    sorted_results = sorted(
-        results, key=lambda r: (r.distance, r.rounds, r.error_prob)
-    )
+    sorted_results = sorted(results, key=lambda r: (r.distance, r.rounds, r.error_prob))
 
     prev_d = None
     total_gnn_better = 0
