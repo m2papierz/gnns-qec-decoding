@@ -26,7 +26,7 @@ class DetectorGraph:
     edge_error_prob : ndarray, shape (E,), float32
         Per-edge error probability.
     edge_weight : ndarray, shape (E,), float32
-        Per-edge MWPM weight (typically -log(p/(1-p))).
+        Per-edge MWPM weight (typically ``-log(p/(1-p))``).
     node_coords : ndarray, shape (N, C), float32
         Node coordinates (NaN if unavailable).
     node_is_boundary : ndarray, shape (N,), bool
@@ -50,6 +50,39 @@ class DetectorGraph:
     num_detectors: int
     num_observables: int
     has_boundary: bool
+
+    def __post_init__(self) -> None:
+        """Validate tensor shapes and value consistency."""
+        E = self.edge_index.shape[1]
+        if self.edge_index.shape[0] != 2:
+            raise ValueError(
+                f"edge_index must have shape (2, E), got {self.edge_index.shape}"
+            )
+        if self.edge_error_prob.shape != (E,):
+            raise ValueError(
+                f"edge_error_prob length {self.edge_error_prob.shape[0]} != "
+                f"num edges {E}"
+            )
+        if self.edge_weight.shape != (E,):
+            raise ValueError(
+                f"edge_weight length {self.edge_weight.shape[0]} != num edges {E}"
+            )
+        if self.node_is_boundary.shape != (self.num_nodes,):
+            raise ValueError(
+                f"node_is_boundary length {self.node_is_boundary.shape[0]} != "
+                f"num_nodes {self.num_nodes}"
+            )
+        if self.node_coords.shape[0] != self.num_nodes:
+            raise ValueError(
+                f"node_coords rows {self.node_coords.shape[0]} != "
+                f"num_nodes {self.num_nodes}"
+            )
+        expected_nodes = self.num_detectors + (1 if self.has_boundary else 0)
+        if self.num_nodes != expected_nodes:
+            raise ValueError(
+                f"num_nodes {self.num_nodes} != num_detectors "
+                f"{self.num_detectors} + boundary {int(self.has_boundary)}"
+            )
 
 
 def build_detector_graph(

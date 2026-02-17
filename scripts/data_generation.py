@@ -5,8 +5,7 @@ import logging
 import sys
 from pathlib import Path
 
-from constants import CASES
-from qec_generator import Config, generate_datasets, generate_raw_data
+from src import CASES, Config, generate_datasets, generate_raw_data
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -91,14 +90,21 @@ def main() -> None:
     log.info("Configuration loaded from %s", args.config)
     log.info("Family: %s", cfg.family)
     log.info("Distances: %s", cfg.distances)
-    log.info("Rounds: [d, 2*d] per distance")
+    if cfg.rounds is not None:
+        log.info("Rounds (explicit): %s", cfg.rounds)
+    else:
+        log.info("Rounds: [d, 2*d] per distance (auto)")
     log.info("Error probabilities: %s", cfg.error_probs)
-    log.info("Total settings: %d", len(list(cfg.iter_settings())))
+    log.info("Total settings: %d", total_settings)
     log.info("Samples per split:")
     for split, n_samples in cfg.num_samples.items():
         total = n_samples * total_settings
         log.info(
-            f"  {split}: {n_samples} samples/setting x {total_settings} settings = {total} total",
+            "  %s: %d samples/setting x %d settings = %d total",
+            split,
+            n_samples,
+            total_settings,
+            total,
         )
 
     # Generate raw data
