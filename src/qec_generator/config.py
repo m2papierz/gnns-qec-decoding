@@ -9,10 +9,21 @@ from typing import Any, Dict, Iterator, Tuple
 
 import yaml
 
-from constants import DEFAULT_CHUNK_SIZE, DEFAULT_COMPRESS
+from constants import DEFAULT_CHUNK_SIZE, DEFAULT_COMPRESS, SPLITS
 
 
 logger = logging.getLogger(__name__)
+
+# Stim noise parameters accepted by Circuit.generated() for surface codes.
+# Used for early detection of typos in YAML configs.
+_KNOWN_NOISE_PARAMS: frozenset[str] = frozenset(
+    {
+        "after_clifford_depolarization",
+        "after_reset_flip_probability",
+        "before_measure_flip_probability",
+        "before_round_data_depolarization",
+    }
+)
 
 
 @dataclass
@@ -41,7 +52,8 @@ class Config:
     datasets_dir : Path
         Output directory for processed datasets.
     compress : bool
-        Use compressed numpy format.
+        Reserved for future compressed numpy output.  Currently accepted
+        but not wired to the save pipeline.
     chunk_size : int
         Samples per Stim sampler call.
     seed : int or None
@@ -77,6 +89,34 @@ class Config:
             raise ValueError("At least one error probability required")
         if any(p <= 0 or p >= 1 for p in self.error_probs):
             raise ValueError("Error probabilities must be in (0, 1)")
+
+        # Validate num_samples keys match known splits.
+        unknown_splits = set(self.num_samples) - set(SPLITS)
+        if unknown_splits:
+            raise ValueError(
+                f"Unknown split names in num_samples: {unknown_splits}. "
+                f"Expected subset of {SPLITS}"
+            )
+        if not self.num_samples:
+            raise ValueError("num_samples must define at least one split")
+
+        # Warn on unrecognised Stim noise parameters (likely typos).
+        unknown_noise = set(self.noise) - _KNOWN_NOISE_PARAMS
+        if unknown_noise:
+            logger.warning(
+                "Unrecognised noise parameters (possible typo): %s. "
+                "Known params: %s",
+                sorted(unknown_noise),
+                sorted(_KNOWN_NOISE_PARAMS),
+            )
+
+        # 'compress' is accepted for forward-compatibility but not yet wired
+        # to the save pipeline.
+        if self.compress:
+            logger.debug(
+                "compress=True is set but not yet used; arrays are saved "
+                "as uncompressed .npy"
+            )
 
         logger.debug(
             "Initialized config: family=%s, %d settings",
