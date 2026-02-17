@@ -1,0 +1,32 @@
+# GNN Training Configuration
+# ==========================
+
+# Training case: "logical_head", "mwpm_teacher", or "hybrid"
+case: "logical_head"
+
+# Data paths
+datasets_dir: "./data/datasets"
+output_dir: "./runs"
+
+# Model architecture
+model:
+  hidden_dim: 64
+  num_layers: 4
+  dropout: 0.1
+
+# Optimisation
+optimisation:
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  epochs: 100
+  batch_size: 64
+
+# Data loading
+num_workers: 4
+
+# Edge-case specific (mwpm_teacher / hybrid).
+# Set to null to auto-estimate from training data.
+edge_pos_weight: null
+
+# Reproducibility
+seed: 42

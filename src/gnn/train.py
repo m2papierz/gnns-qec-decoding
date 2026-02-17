@@ -21,6 +21,7 @@ from typing import Any, Dict
 import numpy as np
 import torch
 import torch.nn as nn
+import yaml
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch_geometric.loader import DataLoader
@@ -73,8 +74,8 @@ class TrainConfig:
     case: Case = "logical_head"
     datasets_dir: Path = Path("data/datasets")
     output_dir: Path = Path("runs")
-    hidden_dim: int = 128
-    num_layers: int = 6
+    hidden_dim: int = 64
+    num_layers: int = 4
     dropout: float = 0.1
     lr: float = 1e-3
     weight_decay: float = 1e-4
@@ -84,6 +85,54 @@ class TrainConfig:
     edge_pos_weight: float | None = None
     seed: int = 42
     resume: Path | None = None
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "TrainConfig":
+        """
+        Load configuration from a YAML file.
+
+        YAML keys are mapped to dataclass fields.  Nested sections
+        (``model``, ``optimisation``) are flattened.  Any field not
+        present in the file keeps its default value.
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to the YAML configuration file.
+
+        Returns
+        -------
+        TrainConfig
+            Parsed configuration.
+        """
+        raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+
+        flat: Dict[str, Any] = {}
+
+        # Top-level scalars
+        for key in ("case", "datasets_dir", "output_dir", "num_workers",
+                     "edge_pos_weight", "seed"):
+            if key in raw:
+                flat[key] = raw[key]
+
+        # Nested: model.*
+        model = raw.get("model", {})
+        for key in ("hidden_dim", "num_layers", "dropout"):
+            if key in model:
+                flat[key] = model[key]
+
+        # Nested: optimisation.*
+        optim = raw.get("optimisation", {})
+        for key in ("lr", "weight_decay", "epochs", "batch_size"):
+            if key in optim:
+                flat[key] = optim[key]
+
+        # Path coercion
+        for key in ("datasets_dir", "output_dir"):
+            if key in flat:
+                flat[key] = Path(flat[key])
+
+        return cls(**flat)
 
 
 def seed_everything(seed: int) -> None:

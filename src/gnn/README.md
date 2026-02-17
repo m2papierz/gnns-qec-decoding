@@ -51,9 +51,9 @@ Input/output:
 ```python
 from gnn.models import build_model
 
-model = build_model("logical_head", hidden_dim=128, num_layers=6)
-model = build_model("mwpm_teacher", hidden_dim=128, num_layers=6)
-model = build_model("hybrid", hidden_dim=128, num_layers=6)
+model = build_model("logical_head", hidden_dim=64, num_layers=4)
+model = build_model("mwpm_teacher", hidden_dim=64, num_layers=4)
+model = build_model("hybrid", hidden_dim=64, num_layers=4)
 ```
 
 `mwpm_teacher` and `hybrid` produce identical architectures — they
@@ -64,22 +64,43 @@ differ only in loss computation and evaluation protocol.
 ### Quick start
 
 ```bash
-# Logical head (start here)
-uv run python -m gnn.train --case logical_head --epochs 50
+# Train from config (recommended)
+uv run scripts/train_gnn.py -c configs/train.yaml
 
-# MWPM teacher
-uv run python -m gnn.train --case mwpm_teacher
+# Override case and epochs
+uv run scripts/train_gnn.py -c configs/train.yaml --case mwpm_teacher --epochs 50
 
-# Hybrid
-uv run python -m gnn.train --case hybrid
+# Pure CLI (no config file)
+uv run scripts/train_gnn.py --case logical_head --epochs 50
 
 # Custom hyperparameters
-uv run python -m gnn.train --case logical_head \
-    --hidden-dim 64 --num-layers 4 --lr 5e-4 --batch-size 128
+uv run scripts/train_gnn.py -c configs/train.yaml \
+    --hidden-dim 32 --num-layers 2 --lr 5e-4 --batch-size 128
 
 # Resume from checkpoint
-uv run python -m gnn.train --case logical_head --resume runs/logical_head/best.pt
+uv run scripts/train_gnn.py -c configs/train.yaml --resume runs/logical_head/best.pt
 ```
+
+### Configuration
+
+All hyperparameters are set in `configs/train.yaml`.  CLI arguments
+override config values, so the YAML file acts as the base and CLI
+flags provide per-run tweaks.
+
+```yaml
+case: "logical_head"
+model:
+  hidden_dim: 64
+  num_layers: 4
+  dropout: 0.1
+optimisation:
+  lr: 1.0e-3
+  epochs: 100
+  batch_size: 64
+seed: 42
+```
+
+Programmatic access: `TrainConfig.from_yaml("configs/train.yaml")`.
 
 ### Loss functions
 
@@ -111,8 +132,8 @@ runs/{case}/
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
-| `hidden_dim` | 128 | Embedding dimensionality |
-| `num_layers` | 6 | Message-passing depth |
+| `hidden_dim` | 64 | Embedding dimensionality |
+| `num_layers` | 4 | Message-passing depth |
 | `dropout` | 0.1 | Applied in encoder and heads |
 | `lr` | 1e-3 | Initial learning rate |
 | `weight_decay` | 1e-4 | AdamW L2 regularisation |
@@ -126,14 +147,14 @@ runs/{case}/
 
 ```bash
 # Evaluate (case inferred from checkpoint)
-uv run python -m gnn.eval --checkpoint runs/logical_head/best.pt
+uv run scripts/eval_gnn.py --checkpoint runs/logical_head/best.pt
 
 # Compare with MWPM baseline
-uv run python -m gnn.eval --checkpoint runs/logical_head/best.pt \
+uv run scripts/eval_gnn.py --checkpoint runs/logical_head/best.pt \
     --baseline results/mwpm_baseline.json
 
 # Save report
-uv run python -m gnn.eval --checkpoint runs/logical_head/best.pt \
+uv run scripts/eval_gnn.py --checkpoint runs/logical_head/best.pt \
     --baseline results/mwpm_baseline.json \
     -o results/gnn_logical.json
 ```

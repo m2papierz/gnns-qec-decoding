@@ -100,11 +100,15 @@ Train a GNN decoder and evaluate against the MWPM baseline:
 
 ```bash
 # Train (start with logical_head)
-uv run python -m gnn.train --case logical_head --epochs 50
+uv run scripts/train_gnn.py -c configs/train.yaml
+
+# Override case
+uv run scripts/train_gnn.py -c configs/train.yaml --case mwpm_teacher
 
 # Evaluate with MWPM comparison
-uv run python -m gnn.eval --checkpoint runs/logical_head/best.pt \
+uv run scripts/eval_gnn.py --checkpoint runs/logical_head/best.pt \
     --baseline results/mwpm_baseline.json
 ```
 
-See [`src/gnn/README.md`](src/gnn/README.md) for architecture details, hyperparameters, all three training modes, and evaluation protocols.
+See [`src/gnn/README.md`](src/gnn/README.md) for architecture details,
+hyperparameters, all three training modes, and evaluation protocols.
