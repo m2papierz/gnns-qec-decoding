@@ -116,15 +116,11 @@ def _copy_split(
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    syn_dst = out_dir / f"{split}_syndrome.npy"
-    log_dst = out_dir / f"{split}_logical.npy"
+    syn = np.load(syn_src).astype(np.uint8)
+    log = np.load(log_src).astype(np.uint8)
 
-    save_npy(syn_dst, np.load(syn_src).astype(np.uint8), overwrite)
-    save_npy(log_dst, np.load(log_src).astype(np.uint8), overwrite)
-
-    # Read back to get dimensions
-    syn = np.load(syn_dst, mmap_mode="r")
-    log = np.load(log_dst, mmap_mode="r")
+    save_npy(out_dir / f"{split}_syndrome.npy", syn, overwrite)
+    save_npy(out_dir / f"{split}_logical.npy", log, overwrite)
 
     return {
         "num_shots": syn.shape[0],
@@ -287,7 +283,7 @@ def _write_mwpm_labels(
             selected, axis=1, bitorder=MWPM_BITORDER
         )
 
-    np.save(out_path, packed)
+    save_npy(out_path, packed, overwrite=True)
 
 
 def generate_datasets(

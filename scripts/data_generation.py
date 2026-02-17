@@ -90,10 +90,7 @@ def main() -> None:
     log.info("Configuration loaded from %s", args.config)
     log.info("Family: %s", cfg.family)
     log.info("Distances: %s", cfg.distances)
-    if cfg.rounds is not None:
-        log.info("Rounds (explicit): %s", cfg.rounds)
-    else:
-        log.info("Rounds: [d, 2*d] per distance (auto)")
+    log.info("Rounds: %s", cfg.rounds)
     log.info("Error probabilities: %s", cfg.error_probs)
     log.info("Total settings: %d", total_settings)
     log.info("Samples per split:")
