@@ -11,9 +11,9 @@ import numpy as np
 import pymatching
 from tqdm import tqdm
 
+from constants import CASES, MWPM_BITORDER, MWPM_LABEL, SPLITS, Case
 from qec_generator.config import Config
 from qec_generator.utils import read_json, save_json, save_npy
-from constants import CASES, MWPM_BITORDER, MWPM_LABEL, SPLITS, Case
 
 
 logger = logging.getLogger(__name__)
@@ -436,9 +436,7 @@ def generate_datasets(
             )
 
         # Write metadata
-        save_json(
-            case_root / "settings.json", {"settings": settings_table}, overwrite
-        )
+        save_json(case_root / "settings.json", {"settings": settings_table}, overwrite)
         save_json(
             case_root / "build_meta.json",
             {
