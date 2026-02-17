@@ -5,7 +5,7 @@ import logging
 import sys
 from pathlib import Path
 
-from src import CASES, Config, generate_datasets, generate_raw_data
+from qec_generator import CASES, Config, generate_datasets, generate_raw_data
 
 
 def setup_logging(verbose: bool = False) -> None:
