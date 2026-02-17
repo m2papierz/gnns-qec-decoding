@@ -101,6 +101,10 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
     # Misc
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--resume", type=Path, default=None)
+    parser.add_argument(
+        "--max-samples", type=int, default=None,
+        help="Cap training samples (val capped at max_samples//5)",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
 
     args = parser.parse_args(argv)
@@ -128,6 +132,7 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
         "edge_pos_weight": args.edge_pos_weight,
         "seed": args.seed,
         "resume": args.resume,
+        "max_samples": args.max_samples,
     }
 
     cfg_dict = asdict(cfg)

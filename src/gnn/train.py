@@ -69,6 +69,9 @@ class TrainConfig:
         Random seed for reproducibility.
     resume : Path or None
         Path to checkpoint to resume from.
+    max_samples : int or None
+        Cap on training samples (validation capped at ``max_samples // 5``).
+        If None, use all available data.
     """
 
     case: Case = "logical_head"
@@ -85,6 +88,7 @@ class TrainConfig:
     edge_pos_weight: float | None = None
     seed: int = 42
     resume: Path | None = None
+    max_samples: int | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "TrainConfig":
@@ -111,7 +115,7 @@ class TrainConfig:
 
         # Top-level scalars
         for key in ("case", "datasets_dir", "output_dir", "num_workers",
-                     "edge_pos_weight", "seed"):
+                     "edge_pos_weight", "seed", "max_samples"):
             if key in raw:
                 flat[key] = raw[key]
 
@@ -528,6 +532,12 @@ def train(cfg: TrainConfig) -> Path:
     val_ds = MixedSurfaceCodeDataset(
         datasets_dir=cfg.datasets_dir, case=cfg.case, split="val"
     )
+
+    # Optional sample cap for fast iteration
+    if cfg.max_samples is not None:
+        from torch.utils.data import Subset
+        train_ds = Subset(train_ds, range(min(cfg.max_samples, len(train_ds))))
+        val_ds = Subset(val_ds, range(min(cfg.max_samples // 5, len(val_ds))))
 
     train_loader = DataLoader(
         train_ds,

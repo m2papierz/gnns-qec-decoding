@@ -24,6 +24,9 @@ optimisation:
 # Data loading
 num_workers: 4
 
+# Sample cap for fast iteration (null = use all data)
+max_samples: null
+
 # Edge-case specific (mwpm_teacher / hybrid).
 # Set to null to auto-estimate from training data.
 edge_pos_weight: null
