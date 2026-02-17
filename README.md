@@ -93,3 +93,18 @@ uv run scripts/eval_mwpm.py --regenerate
 ```
 
 The script reports a per-setting LER table, summary statistics by distance, an estimated error-correction threshold, and automatic sanity checks (LER monotonicity in `p`, scaling with `d` below threshold).
+
+## GNN training and evaluation
+
+Train a GNN decoder and evaluate against the MWPM baseline:
+
+```bash
+# Train (start with logical_head)
+uv run python -m gnn.train --case logical_head --epochs 50
+
+# Evaluate with MWPM comparison
+uv run python -m gnn.eval --checkpoint runs/logical_head/best.pt \
+    --baseline results/mwpm_baseline.json
+```
+
+See [`src/gnn/README.md`](src/gnn/README.md) for architecture details, hyperparameters, all three training modes, and evaluation protocols.
