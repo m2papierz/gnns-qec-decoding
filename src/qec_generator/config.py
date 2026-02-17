@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterator, Tuple
 
 import yaml
 
-from constants import DEFAULT_CHUNK_SIZE, DEFAULT_COMPRESS
+from qec_generator._constants import DEFAULT_CHUNK_SIZE, DEFAULT_COMPRESS
 
 
 logger = logging.getLogger(__name__)
@@ -20,18 +20,22 @@ class Config:
     """
     Configuration for generating surface code datasets.
 
-    Attributes
+    Parameters
     ----------
     family : str
-        Stim surface code family (e.g., "rotated_memory_x").
+        Stim surface code family (e.g., ``"rotated_memory_x"``).
     distances : list[int]
         Code distances to generate.
-    error_probs : Llistist[float]
+    rounds : list[int]
+        Stabilizer measurement round counts.  Each ``(distance, rounds,
+        error_prob)`` combination becomes one setting.  More rounds means
+        a longer temporal axis in the detector graph.
+    error_probs : list[float]
         Physical error probabilities.
     num_samples : Dict[str, int]
-        Samples per split: {"train": N, "val": N, "test": N}.
+        Samples per split: ``{"train": N, "val": N, "test": N}``.
     noise : Dict[str, Any]
-        Stim noise parameters. Use "p" for error_prob substitution.
+        Stim noise parameters.  Use ``"p"`` for error_prob substitution.
     raw_data_dir : Path
         Output directory for raw sampled data.
     datasets_dir : Path
@@ -40,12 +44,13 @@ class Config:
         Use compressed numpy format.
     chunk_size : int
         Samples per Stim sampler call.
-    seed : int | None
+    seed : int or None
         Global RNG seed for reproducibility.
     """
 
     family: str
     distances: list[int]
+    rounds: list[int]
     error_probs: list[float]
     num_samples: Dict[str, int]
     noise: Dict[str, Any]
@@ -56,13 +61,18 @@ class Config:
     seed: int | None = None
 
     def __post_init__(self) -> None:
-        """Resolve and validate paths."""
+        """Resolve paths and validate fields."""
         self.raw_data_dir = Path(self.raw_data_dir).expanduser().resolve()
         self.datasets_dir = Path(self.datasets_dir).expanduser().resolve()
 
-        # Validate configuration
         if not self.distances:
             raise ValueError("At least one distance required")
+        if any(d < 2 for d in self.distances):
+            raise ValueError("Distances must be >= 2")
+        if not self.rounds:
+            raise ValueError("At least one round count required")
+        if any(r < 1 for r in self.rounds):
+            raise ValueError("All round counts must be >= 1")
         if not self.error_probs:
             raise ValueError("At least one error probability required")
         if any(p <= 0 or p >= 1 for p in self.error_probs):
@@ -76,15 +86,15 @@ class Config:
 
     def iter_settings(self) -> Iterator[Tuple[int, int, float]]:
         """
-        Yield all (distance, rounds, error_prob) combinations.
+        Yield all ``(distance, rounds, error_prob)`` combinations.
 
         Yields
         ------
         Tuple[int, int, float]
-            (distance, rounds, error_prob) tuples.
+            ``(distance, rounds, error_prob)`` for every setting.
         """
         for d in self.distances:
-            for r in [d, 2 * d]:
+            for r in self.rounds:
                 for p in self.error_probs:
                     yield d, r, p
 
@@ -104,14 +114,14 @@ class Config:
         Returns
         -------
         Path
-            Directory path: raw_data_dir/d{distance}_r{rounds}_p{p}.
+            Directory path: ``raw_data_dir/d{distance}_r{rounds}_p{p}``.
         """
         p_tag = f"p{p:.6g}".replace(".", "_")
         return self.raw_data_dir / f"d{distance}_r{rounds}_{p_tag}"
 
     def resolve_noise(self, p: float) -> dict[str, float]:
         """
-        Resolve noise parameters, substituting 'p' with error probability.
+        Resolve noise parameters, substituting ``"p"`` with *p*.
 
         Parameters
         ----------
@@ -121,7 +131,7 @@ class Config:
         Returns
         -------
         dict[str, float]
-            Noise parameters with 'p' replaced by actual value.
+            Noise parameters with ``"p"`` replaced by actual value.
         """
         return {
             k: float(p) if (isinstance(v, str) and v.lower() == "p") else float(v)
@@ -149,6 +159,8 @@ class Config:
             If config file does not exist.
         ValueError
             If YAML structure is invalid.
+        KeyError
+            If required fields are missing.
         """
         path = Path(path)
         if not path.is_file():
@@ -169,6 +181,7 @@ class Config:
         return cls(
             family=sc["family"],
             distances=list(sc["distances"]),
+            rounds=list(sc["rounds"]),
             error_probs=list(sc["error_probs"]),
             num_samples={k: int(v) for k, v in sc["num_samples"].items()},
             noise=dict(sc.get("noise", {})),
