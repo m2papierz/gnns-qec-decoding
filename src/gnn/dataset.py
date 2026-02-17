@@ -220,9 +220,7 @@ class MixedSurfaceCodeDataset(Dataset):
             y = logical
         else:
             packed, dir_to_undir, num_und = self._get_mwpm_arrays(sid)
-            und = _unpack_bits_row(
-                np.asarray(packed[shot], dtype=np.uint8), num_und
-            )
+            und = _unpack_bits_row(np.asarray(packed[shot], dtype=np.uint8), num_und)
             y = torch.from_numpy(und[dir_to_undir].astype(np.float32, copy=False))
 
         return Data(

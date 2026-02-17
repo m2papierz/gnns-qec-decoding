@@ -161,9 +161,7 @@ def _load_or_build_circuit(
         return stim.Circuit.from_file(str(circuit_path))
 
     if not regenerate and not circuit_path.is_file():
-        logger.warning(
-            "No saved circuit at %s; rebuilding from config", circuit_path
-        )
+        logger.warning("No saved circuit at %s; rebuilding from config", circuit_path)
 
     return build_circuit(cfg, distance, rounds, p)
 
@@ -367,11 +365,11 @@ def evaluate_all(
                     f"d={d} r={r} p={p:.4f} LER={result.logical_error_rate:.4f}"
                 )
             except FileNotFoundError as exc:
-                logger.warning("Skipping d=%d r=%d p=%s split=%s: %s", d, r, p, split, exc)
-            except Exception:
-                logger.exception(
-                    "Failed: d=%d r=%d p=%s split=%s", d, r, p, split
+                logger.warning(
+                    "Skipping d=%d r=%d p=%s split=%s: %s", d, r, p, split, exc
                 )
+            except Exception:
+                logger.exception("Failed: d=%d r=%d p=%s split=%s", d, r, p, split)
 
             progress.update(1)
 
@@ -430,9 +428,7 @@ def print_report(report: EvalReport) -> None:
     for split in sorted(set(r.split for r in results)):
         print(f"  [{split}]")
         for d in sorted(set(r.distance for r in results)):
-            subset = [
-                r for r in results if r.distance == d and r.split == split
-            ]
+            subset = [r for r in results if r.distance == d and r.split == split]
             if not subset:
                 continue
             lers = [r.logical_error_rate for r in subset]
@@ -652,11 +648,13 @@ def _estimate_threshold(results: List[SettingResult]) -> float:
     for split in set(r.split for r in results):
         for r_val in set(r.rounds for r in results):
             low_d = [
-                r for r in results
+                r
+                for r in results
                 if r.distance == d_min and r.rounds == r_val and r.split == split
             ]
             high_d = [
-                r for r in results
+                r
+                for r in results
                 if r.distance == d_max and r.rounds == r_val and r.split == split
             ]
             low_map = {r.error_prob: r for r in low_d}
@@ -699,9 +697,7 @@ def _run_sanity_checks(report: EvalReport) -> None:
 
     threshold_p = _estimate_threshold(results)
     if threshold_p < float("inf"):
-        logger.info(
-            "Estimated error-correction threshold: p ≈ %.4f", threshold_p
-        )
+        logger.info("Estimated error-correction threshold: p ≈ %.4f", threshold_p)
 
     # ------------------------------------------------------------------
     # Check 1: LER should increase with p for fixed (d, r)
@@ -713,9 +709,7 @@ def _run_sanity_checks(report: EvalReport) -> None:
                     [
                         r
                         for r in results
-                        if r.distance == d
-                        and r.rounds == r_val
-                        and r.split == split
+                        if r.distance == d and r.rounds == r_val and r.split == split
                     ],
                     key=lambda x: x.error_prob,
                 )
@@ -758,9 +752,7 @@ def _run_sanity_checks(report: EvalReport) -> None:
                     [
                         r
                         for r in results
-                        if r.error_prob == p
-                        and r.rounds == r_val
-                        and r.split == split
+                        if r.error_prob == p and r.rounds == r_val and r.split == split
                     ],
                     key=lambda x: x.distance,
                 )
