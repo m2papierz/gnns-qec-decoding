@@ -11,31 +11,16 @@ Three evaluation protocols match the three training cases:
   with PyMatching → LER.  Also reports edge accuracy for diagnostics.
 - ``hybrid``: identical to ``mwpm_teacher`` (same architecture, same
   eval path).
-
-Usage
------
-    # Evaluate logical_head on test split
-    python -m gnn.eval --checkpoint runs/logical_head/best.pt
-
-    # Compare with MWPM baseline
-    python -m gnn.eval --checkpoint runs/logical_head/best.pt \\
-        --baseline results/mwpm_baseline.json
-
-    # Save report
-    python -m gnn.eval --checkpoint runs/logical_head/best.pt \\
-        -o results/gnn_logical.json
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List
 
 import numpy as np
 import pymatching
@@ -792,7 +777,8 @@ def print_report(report: EvalReport) -> None:
 
 
 def save_report(report: EvalReport, path: Path) -> None:
-    """Save the evaluation report to a JSON file.
+    """
+    Save the evaluation report to a JSON file.
 
     Parameters
     ----------
@@ -807,117 +793,3 @@ def save_report(report: EvalReport, path: Path) -> None:
         encoding="utf-8",
     )
     logger.info("Report saved to %s", path)
-
-
-def setup_logging(verbose: bool = False) -> None:
-    """
-    Configure root logging.
-
-    Parameters
-    ----------
-    verbose : bool
-        Enable ``DEBUG`` level if True, otherwise ``INFO``.
-    """
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        stream=sys.stdout,
-    )
-
-
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """
-    Parse command-line arguments.
-
-    Parameters
-    ----------
-    argv : sequence of str or None
-        Arguments to parse; defaults to ``sys.argv[1:]``.
-
-    Returns
-    -------
-    argparse.Namespace
-        Parsed arguments.
-    """
-    parser = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-
-    parser.add_argument(
-        "--checkpoint",
-        type=Path,
-        required=True,
-        help="Path to model checkpoint (e.g. runs/logical_head/best.pt)",
-    )
-    parser.add_argument(
-        "--datasets-dir",
-        type=Path,
-        default=Path("data/datasets"),
-        help="Root directory of packaged datasets",
-    )
-    parser.add_argument(
-        "--split",
-        type=str,
-        default="test",
-        help="Data split to evaluate (default: test)",
-    )
-    parser.add_argument(
-        "--baseline",
-        type=Path,
-        default=None,
-        help="MWPM baseline JSON report for comparison",
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=256,
-        help="Shots per inference batch (default: 256)",
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        default=None,
-        help="Save JSON report to this path",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable DEBUG logging",
-    )
-
-    return parser.parse_args(argv)
-
-
-def main(argv: Sequence[str] | None = None) -> None:
-    """
-    Entry point for GNN evaluation.
-
-    Parameters
-    ----------
-    argv : sequence of str or None
-        CLI arguments; defaults to ``sys.argv[1:]``.
-    """
-    args = parse_args(argv)
-    setup_logging(verbose=args.verbose)
-
-    report = evaluate_all(
-        checkpoint=args.checkpoint,
-        datasets_dir=args.datasets_dir,
-        split=args.split,
-        baseline_path=args.baseline,
-        batch_size=args.batch_size,
-    )
-
-    print_report(report)
-
-    if args.output is not None:
-        save_report(report, args.output)
-
-
-if __name__ == "__main__":
-    main()
