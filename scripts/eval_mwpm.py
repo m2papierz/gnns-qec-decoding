@@ -9,7 +9,7 @@ Usage
 -----
     uv run scripts/eval_mwpm.py -c configs/data_generation.yaml
     uv run scripts/eval_mwpm.py -c configs/data_generation.yaml --splits test val
-    uv run scripts/eval_mwpm.py -c configs/data_generation.yaml -o results/mwpm_baseline.json
+    uv run scripts/eval_mwpm.py -c configs/data_generation.yaml -o outputs/results/mwpm_baseline.json
 
 The script can operate in two modes (chosen automatically):
 

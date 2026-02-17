@@ -78,7 +78,7 @@ uv run scripts/train_gnn.py -c configs/train.yaml \
     --hidden-dim 32 --num-layers 2 --lr 5e-4 --batch-size 128
 
 # Resume from checkpoint
-uv run scripts/train_gnn.py -c configs/train.yaml --resume runs/logical_head/best.pt
+uv run scripts/train_gnn.py -c configs/train.yaml --resume outputs/runs/logical_head/best.pt
 ```
 
 ### Configuration
@@ -122,7 +122,7 @@ Programmatic access: `TrainConfig.from_yaml("configs/train.yaml")`.
 ### Outputs
 
 ```
-runs/{case}/
+outputs/runs/{case}/
 ├── best.pt        # best model checkpoint
 ├── config.json    # full hyperparameter record
 └── history.json   # per-epoch train/val metrics
@@ -147,16 +147,16 @@ runs/{case}/
 
 ```bash
 # Evaluate (case inferred from checkpoint)
-uv run scripts/eval_gnn.py --checkpoint runs/logical_head/best.pt
+uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt
 
 # Compare with MWPM baseline
-uv run scripts/eval_gnn.py --checkpoint runs/logical_head/best.pt \
-    --baseline results/mwpm_baseline.json
+uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \
+    --baseline outputs/results/mwpm_baseline.json
 
 # Save report
-uv run scripts/eval_gnn.py --checkpoint runs/logical_head/best.pt \
-    --baseline results/mwpm_baseline.json \
-    -o results/gnn_logical.json
+uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \
+    --baseline outputs/results/mwpm_baseline.json \
+    -o outputs/results/gnn_logical.json
 ```
 
 ### Evaluation protocols

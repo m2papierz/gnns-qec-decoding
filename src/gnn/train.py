@@ -76,7 +76,7 @@ class TrainConfig:
 
     case: Case = "logical_head"
     datasets_dir: Path = Path("data/datasets")
-    output_dir: Path = Path("runs")
+    output_dir: Path = Path("outputs/runs")
     hidden_dim: int = 64
     num_layers: int = 4
     dropout: float = 0.1
@@ -581,12 +581,12 @@ def train(cfg: TrainConfig) -> Path:
 
     # ── Optimizer + scheduler ─────────────────────────────────────
 
-    optimizer = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-    scheduler = CosineAnnealingLR(
-        optimizer,
-        T_max=cfg.epochs,
-        eta_min=cfg.lr / 50,
+    optimizer = AdamW(
+        model.parameters(),
+        lr=cfg.lr,
+        weight_decay=cfg.weight_decay,
     )
+    scheduler = CosineAnnealingLR(optimizer, T_max=cfg.epochs, eta_min=cfg.lr / 50)
 
     # ── Loss ──────────────────────────────────────────────────────
 
@@ -610,7 +610,9 @@ def train(cfg: TrainConfig) -> Path:
         start_epoch = ckpt_info["epoch"] + 1
         best_metric = ckpt_info["best_metric"]
         logger.info(
-            "Resuming from epoch %d (best_metric=%.6f)", start_epoch, best_metric
+            "Resuming from epoch %d (best_metric=%.6f)",
+            start_epoch,
+            best_metric,
         )
 
     # ── Save config ───────────────────────────────────────────────
@@ -637,9 +639,20 @@ def train(cfg: TrainConfig) -> Path:
         t0 = time.perf_counter()
 
         train_metrics = train_one_epoch(
-            model, train_loader, criterion, optimizer, device, cfg.case
+            model,
+            train_loader,
+            criterion,
+            optimizer,
+            device,
+            cfg.case,
         )
-        val_metrics = validate(model, val_loader, criterion, device, cfg.case)
+        val_metrics = validate(
+            model,
+            val_loader,
+            criterion,
+            device,
+            cfg.case,
+        )
 
         scheduler.step()
         elapsed = time.perf_counter() - t0

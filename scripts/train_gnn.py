@@ -13,7 +13,7 @@ Examples
     uv run scripts/train_gnn.py --case logical_head --hidden-dim 64 --epochs 50
 
     # Resume from checkpoint
-    uv run scripts/train_gnn.py -c configs/train.yaml --resume runs/logical_head/best.pt
+    uv run scripts/train_gnn.py -c configs/train.yaml --resume outputs/runs/logical_head/best.pt
 """
 
 import argparse

@@ -4,15 +4,15 @@ Evaluate a trained GNN decoder and compare with MWPM baseline.
 Examples
 --------
     # Evaluate on test split
-    uv run scripts/eval_gnn.py --checkpoint runs/logical_head/best.pt
+    uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt
 
     # Compare with MWPM baseline
-    uv run scripts/eval_gnn.py --checkpoint runs/logical_head/best.pt \\
-        --baseline results/mwpm_baseline.json
+    uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \\
+        --baseline outputs/results/mwpm_baseline.json
 
     # Save JSON report
-    uv run scripts/eval_gnn.py --checkpoint runs/logical_head/best.pt \\
-        -o results/gnn_logical.json
+    uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \\
+        -o outputs/results/gnn_logical.json
 """
 
 import argparse
@@ -65,7 +65,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--checkpoint",
         type=Path,
         required=True,
-        help="Path to model checkpoint (e.g. runs/logical_head/best.pt)",
+        help="Path to model checkpoint (e.g. outputs/runs/logical_head/best.pt)",
     )
     parser.add_argument(
         "--datasets-dir",

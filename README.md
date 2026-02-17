@@ -86,7 +86,7 @@ Before training any GNN, establish reference LER curves with the classical MWPM 
 uv run scripts/eval_mwpm.py -c configs/data_generation.yaml
 
 # Multiple splits + JSON export
-uv run scripts/eval_mwpm.py --splits test val -o results/mwpm_baseline.json
+uv run scripts/eval_mwpm.py --splits test val -o outputs/results/mwpm_baseline.json
 
 # Rebuild circuits from config (if .stim files are missing)
 uv run scripts/eval_mwpm.py --regenerate
@@ -106,8 +106,8 @@ uv run scripts/train_gnn.py -c configs/train.yaml
 uv run scripts/train_gnn.py -c configs/train.yaml --case mwpm_teacher
 
 # Evaluate with MWPM comparison
-uv run scripts/eval_gnn.py --checkpoint runs/logical_head/best.pt \
-    --baseline results/mwpm_baseline.json
+uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \
+    --baseline outputs/results/mwpm_baseline.json
 ```
 
 See [`src/gnn/README.md`](src/gnn/README.md) for architecture details,
