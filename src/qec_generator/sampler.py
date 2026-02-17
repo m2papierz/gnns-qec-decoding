@@ -101,6 +101,7 @@ def _write_graph(
             "num_nodes": graph.num_nodes,
             "num_detectors": graph.num_detectors,
             "num_observables": graph.num_observables,
+            "num_edges": graph.edge_index.shape[1],
             "has_boundary": graph.has_boundary,
         },
         overwrite,
@@ -150,7 +151,9 @@ def _generate_split(
     log_path = out_dir / f"{split}_logical.npy"
     meta_path = out_dir / f"{split}_meta.json"
 
-    if syn_path.exists() and log_path.exists() and not overwrite:
+    # Skip only when *all* outputs already exist and overwrite is off.
+    all_exist = syn_path.exists() and log_path.exists() and meta_path.exists()
+    if all_exist and not overwrite:
         logger.debug("Split '%s' already exists, skipping", split)
         return
 
@@ -175,9 +178,16 @@ def _generate_split(
         logicals[offset : offset + batch_size] = obs.astype(np.uint8, copy=False)
         offset += batch_size
 
-    # Save arrays
-    save_npy(syn_path, syndromes, overwrite=True)
-    save_npy(log_path, logicals, overwrite=True)
+    # Sanity: verify we filled the pre-allocated arrays completely.
+    assert (
+        offset == n_samples
+    ), f"Sampling mismatch: expected {n_samples} shots, got {offset}"
+
+    # Save arrays — respect caller's overwrite flag. The early-return guard
+    # above already skips when files exist and overwrite=False, so by this
+    # point we always want to write (either first run or explicit overwrite).
+    save_npy(syn_path, syndromes, overwrite=overwrite)
+    save_npy(log_path, logicals, overwrite=overwrite)
 
     # Save metadata
     save_json(
@@ -191,7 +201,7 @@ def _generate_split(
             "chunk_size": cfg.chunk_size,
             "stim_version": getattr(stim, "__version__", "unknown"),
         },
-        overwrite=True,
+        overwrite=overwrite,
     )
 
 
