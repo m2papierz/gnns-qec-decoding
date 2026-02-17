@@ -11,9 +11,9 @@ import numpy as np
 import pymatching
 from tqdm import tqdm
 
-from constants import CASES, MWPM_BITORDER, MWPM_LABEL, SPLITS, Case
 from qec_generator.config import Config
 from qec_generator.utils import read_json, save_json, save_npy
+from constants import CASES, MWPM_BITORDER, MWPM_LABEL, SPLITS, Case
 
 
 logger = logging.getLogger(__name__)
@@ -70,10 +70,11 @@ def _copy_graph(
         "num_nodes": num_nodes,
         "num_detectors": meta.get("num_detectors", -1),
         "num_observables": meta.get("num_observables", -1),
+        "num_edges": int(edge_index.shape[1]),
         "has_boundary": meta.get("has_boundary", False),
         "edge_attr_columns": ["error_prob", "weight"],
     }
-    save_json(out_dir / "graph_meta.json", graph_meta)
+    save_json(out_dir / "graph_meta.json", graph_meta, overwrite)
     return graph_meta
 
 
@@ -265,11 +266,17 @@ def _write_mwpm_labels(
             "bitorder": MWPM_BITORDER,
             "label": MWPM_LABEL,
         },
+        overwrite,
     )
 
     # Decode syndromes in batches
     syndrome = np.load(shard_dir / f"{split}_syndrome.npy", mmap_mode="r")
     n_samples = syndrome.shape[0]
+    if syndrome.shape[1] != num_detectors:
+        raise ValueError(
+            f"MWPM label gen: syndrome width {syndrome.shape[1]} != "
+            f"num_detectors {num_detectors} for split '{split}'"
+        )
     packed_cols = math.ceil(num_und / 8)
     packed = np.empty((n_samples, packed_cols), dtype=np.uint8)
 
@@ -355,7 +362,7 @@ def generate_datasets(
 
             split_stats: dict[str, dict[str, int]] = {}
 
-            # Copy splits
+            # Copy splits and cross-validate against graph metadata.
             for split in SPLITS:
                 try:
                     if overwrite or not (shard_dir / f"{split}_syndrome.npy").exists():
@@ -372,6 +379,15 @@ def generate_datasets(
                             "num_observables": log.shape[1] if log.ndim == 2 else 1,
                         }
                     split_stats[split] = stats
+
+                    # Cross-validate: graph and split must agree on detector count.
+                    graph_nd = graph_meta.get("num_detectors", -1)
+                    if graph_nd >= 0 and stats["num_detectors"] != graph_nd:
+                        raise ValueError(
+                            f"Detector count mismatch for setting d={d} r={r} "
+                            f"p={p} split={split}: graph says {graph_nd}, "
+                            f"syndrome has {stats['num_detectors']}"
+                        )
 
                     # Build global index
                     n = stats["num_shots"]
@@ -420,7 +436,9 @@ def generate_datasets(
             )
 
         # Write metadata
-        save_json(case_root / "settings.json", {"settings": settings_table})
+        save_json(
+            case_root / "settings.json", {"settings": settings_table}, overwrite
+        )
         save_json(
             case_root / "build_meta.json",
             {
@@ -428,6 +446,7 @@ def generate_datasets(
                 "raw_data_dir": str(cfg.raw_data_dir),
                 "datasets_dir": str(cfg.datasets_dir),
             },
+            overwrite,
         )
 
     logger.info("Dataset generation complete")
