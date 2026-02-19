@@ -253,19 +253,7 @@ def build_criterion(
 
 
 def _validate_dataset(ds: MixedSurfaceCodeDataset, label: str) -> None:
-    """
-    Smoke-test a dataset by loading the first sample.
-
-    Raises immediately if shapes are wrong rather than failing
-    mid-epoch.
-
-    Parameters
-    ----------
-    ds : MixedSurfaceCodeDataset
-        Dataset to validate.
-    label : str
-        Label for error messages (e.g. ``"train"``, ``"val"``).
-    """
+    """Smoke-test dataset by loading first sample; raises on bad shapes."""
     sample = ds[0]
     if sample.x.ndim != 2 or sample.x.shape[1] != 1:
         raise ValueError(
@@ -351,7 +339,9 @@ def train_one_epoch(
                 pred = (logits > 0.0).float()  # (B, num_obs)
                 target_2d = target.view_as(pred)
                 total_graphs += pred.shape[0]
-                total_errors += int((pred != target_2d).any(dim=1).sum().item())
+                total_errors += int(
+                    (pred != target_2d).any(dim=1).sum().item()
+                )
         else:
             # logits: (E_total,), batch.y: (E_total,)
             loss = criterion(logits, batch.y)
@@ -422,7 +412,9 @@ def validate(
             pred = (logits > 0.0).float()  # (B, num_obs)
             target_2d = target.view_as(pred)
             total_graphs += pred.shape[0]
-            total_errors += int((pred != target_2d).any(dim=1).sum().item())
+            total_errors += int(
+                (pred != target_2d).any(dim=1).sum().item()
+            )
         else:
             loss = criterion(logits, batch.y)
 
@@ -529,21 +521,7 @@ def load_checkpoint(
 
 
 def _validate_resume_config(cfg: TrainConfig, ckpt_cfg: Dict[str, Any]) -> None:
-    """
-    Verify that resume checkpoint is compatible with current config.
-
-    Parameters
-    ----------
-    cfg : TrainConfig
-        Current training configuration.
-    ckpt_cfg : dict
-        Configuration stored in the checkpoint.
-
-    Raises
-    ------
-    ValueError
-        If any architecture parameter differs between configs.
-    """
+    """Raise ValueError if checkpoint architecture doesn't match current config."""
     for key in ("case", "hidden_dim", "num_layers"):
         current = getattr(cfg, key)
         saved = ckpt_cfg.get(key)
@@ -555,20 +533,7 @@ def _validate_resume_config(cfg: TrainConfig, ckpt_cfg: Dict[str, Any]) -> None:
 
 
 def _best_metric_key(case: Case) -> str:
-    """
-    Return the validation metric to use for checkpointing.
-
-    Parameters
-    ----------
-    case : str
-        Training case.
-
-    Returns
-    -------
-    str
-        Metric key: ``"ler"`` for ``logical_head``, ``"loss"``
-        otherwise.
-    """
+    """Return 'ler' for logical_head, 'loss' otherwise."""
     return "ler" if case == "logical_head" else "loss"
 
 

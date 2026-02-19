@@ -301,7 +301,6 @@ def _build_batch(
         Batched PyG graphs ready for model forward.
     """
     n = end - start
-    num_edges = edge_index.shape[1]
 
     # Node features: (n, num_detectors) => pad => (n, num_nodes) => (n*num_nodes, 1)
     det = torch.from_numpy(
@@ -395,21 +394,7 @@ def _eval_logical_head(
 
 
 def _undirected_edges(edge_index: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Extract undirected edge mapping from directed edge index.
-
-    Parameters
-    ----------
-    edge_index : ndarray, shape (2, E)
-        Directed edge list.
-
-    Returns
-    -------
-    und_pairs : ndarray, shape (U, 2)
-        Unique undirected edge pairs.
-    dir_to_undir : ndarray, shape (E,)
-        Mapping from directed edge index to undirected index.
-    """
+    """Return (unique undirected pairs, directed=>undirected index map)."""
     src, dst = edge_index[0], edge_index[1]
     pairs = np.stack([np.minimum(src, dst), np.maximum(src, dst)], axis=1)
     unique, inverse = np.unique(pairs, axis=0, return_inverse=True)
@@ -459,21 +444,7 @@ def _build_matching_from_weights(
 
 
 def _logits_to_weights(logits: np.ndarray) -> np.ndarray:
-    """
-    Convert raw logits to MWPM-compatible positive weights.
-
-    Maps logit => sigmoid => log-likelihood ratio, clamped to positive.
-
-    Parameters
-    ----------
-    logits : ndarray
-        Raw model logits (any shape).
-
-    Returns
-    -------
-    ndarray
-        Positive MWPM weights (same shape).
-    """
+    """Logit => sigmoid => log-likelihood ratio, clamped positive."""
     prob = 1.0 / (1.0 + np.exp(-logits))
     prob = np.clip(prob, 1e-7, 1.0 - 1e-7)
     weights = np.log((1.0 - prob) / prob)
@@ -485,23 +456,7 @@ def _directed_to_undirected_logits(
     dir_to_undir: np.ndarray,
     num_undirected: int,
 ) -> np.ndarray:
-    """
-    Average directed edge logits into undirected edge logits.
-
-    Parameters
-    ----------
-    directed_logits : ndarray, shape (E,)
-        Per-directed-edge logits for a single graph.
-    dir_to_undir : ndarray, shape (E,)
-        Mapping from directed to undirected edge index.
-    num_undirected : int
-        Number of unique undirected edges.
-
-    Returns
-    -------
-    ndarray, shape (num_undirected,)
-        Mean logit per undirected edge.
-    """
+    """Average directed edge logits into per-undirected-edge means."""
     logit_sum = np.zeros(num_undirected, dtype=np.float64)
     logit_count = np.zeros(num_undirected, dtype=np.int32)
     np.add.at(logit_sum, dir_to_undir, directed_logits)
@@ -847,8 +802,6 @@ def print_report(report: EvalReport) -> None:
     lines.append("")
 
     output = "\n".join(lines)
-    # Log and print so output is captured regardless of logging config
-    logger.info("Evaluation results:\n%s", output)
     print(output)
 
 
