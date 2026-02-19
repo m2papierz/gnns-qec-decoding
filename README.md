@@ -2,6 +2,9 @@
 
 An end-to-end project on decoding topological quantum error-correcting codes with Graph Neural Networks (GNNs).
 
+> [!WARNING]
+> Project is under active developement.
+
 ## Background
 
 Physical qubits are fragile, environmental noise introduces random bit-flip, phase-flip, and depolarisation errors. Quantum error correction (QEC) protects a **logical qubit** by encoding it across many physical qubits arranged on a lattice and periodically measuring parity checks called **stabilisers**.
