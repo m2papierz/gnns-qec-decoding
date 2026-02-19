@@ -101,6 +101,20 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
         help="pos_weight for edge BCE (auto-estimated if omitted)",
     )
 
+    # Robustness
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=None,
+        help="Maximum gradient norm for clipping (default: 1.0)",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=None,
+        help="Early stopping patience in epochs (0 = disabled, default: 15)",
+    )
+
     # Misc
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--resume", type=Path, default=None)
@@ -135,6 +149,8 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
         "batch_size": args.batch_size,
         "num_workers": args.num_workers,
         "edge_pos_weight": args.edge_pos_weight,
+        "max_grad_norm": args.max_grad_norm,
+        "patience": args.patience,
         "seed": args.seed,
         "resume": args.resume,
         "max_samples": args.max_samples,

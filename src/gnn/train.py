@@ -65,6 +65,11 @@ class TrainConfig:
     edge_pos_weight : float or None
         Positive-class weight for edge BCE loss.  If None, estimated
         from training data.
+    max_grad_norm : float
+        Maximum gradient norm for clipping.
+    patience : int
+        Early stopping patience (epochs without improvement).
+        Set to 0 to disable early stopping.
     seed : int
         Random seed for reproducibility.
     resume : Path or None
@@ -86,6 +91,8 @@ class TrainConfig:
     batch_size: int = 64
     num_workers: int = 4
     edge_pos_weight: float | None = None
+    max_grad_norm: float = 1.0
+    patience: int = 15
     seed: int = 42
     resume: Path | None = None
     max_samples: int | None = None
@@ -120,6 +127,8 @@ class TrainConfig:
             "output_dir",
             "num_workers",
             "edge_pos_weight",
+            "max_grad_norm",
+            "patience",
             "seed",
             "max_samples",
         ):
@@ -181,7 +190,7 @@ def _estimate_edge_pos_weight(
     Returns
     -------
     float
-        Estimated ``pos_weight``.  Clamped to ``[1.0, 100.0]``.
+        Estimated ``pos_weight``.  Clamped to ``[1.0, 200.0]``.
     """
     total_pos = 0
     total_neg = 0
@@ -199,11 +208,12 @@ def _estimate_edge_pos_weight(
         return 10.0
 
     raw = total_neg / total_pos
-    clamped = float(np.clip(raw, 1.0, 100.0))
+    clamped = float(np.clip(raw, 1.0, 200.0))
     logger.info(
-        "Edge label balance: %d pos / %d neg → pos_weight=%.1f",
+        "Edge label balance: %d pos / %d neg → raw=%.1f, pos_weight=%.1f",
         total_pos,
         total_neg,
+        raw,
         clamped,
     )
     return clamped
@@ -242,6 +252,46 @@ def build_criterion(
     return nn.BCEWithLogitsLoss()
 
 
+def _validate_dataset(ds: MixedSurfaceCodeDataset, label: str) -> None:
+    """
+    Smoke-test a dataset by loading the first sample.
+
+    Raises immediately if shapes are wrong rather than failing
+    mid-epoch.
+
+    Parameters
+    ----------
+    ds : MixedSurfaceCodeDataset
+        Dataset to validate.
+    label : str
+        Label for error messages (e.g. ``"train"``, ``"val"``).
+    """
+    sample = ds[0]
+    if sample.x.ndim != 2 or sample.x.shape[1] != 1:
+        raise ValueError(
+            f"{label} dataset: expected x shape (N, 1), got {tuple(sample.x.shape)}"
+        )
+    if sample.edge_index.shape[0] != 2:
+        raise ValueError(
+            f"{label} dataset: expected edge_index shape (2, E), "
+            f"got {tuple(sample.edge_index.shape)}"
+        )
+    if sample.edge_attr.ndim != 2:
+        raise ValueError(
+            f"{label} dataset: expected edge_attr shape (E, D), "
+            f"got {tuple(sample.edge_attr.shape)}"
+        )
+    if sample.y.ndim < 1:
+        raise ValueError(f"{label} dataset: y is scalar, expected ≥1D")
+    logger.debug(
+        "%s dataset validated: x=%s, edges=%d, y=%s",
+        label,
+        tuple(sample.x.shape),
+        sample.edge_index.shape[1],
+        tuple(sample.y.shape),
+    )
+
+
 def train_one_epoch(
     model: QECDecoder,
     loader: DataLoader,
@@ -249,6 +299,7 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     case: Case,
+    max_grad_norm: float = 1.0,
 ) -> Dict[str, float]:
     """
     Run one training epoch.
@@ -267,6 +318,8 @@ def train_one_epoch(
         Compute device.
     case : str
         Training case (determines how predictions map to targets).
+    max_grad_norm : float
+        Maximum gradient norm for clipping.
 
     Returns
     -------
@@ -295,14 +348,18 @@ def train_one_epoch(
 
             # LER: any observable wrong → logical error
             with torch.no_grad():
-                pred = (logits.view(-1) > 0.0).float()
-                total_graphs += int(batch.num_graphs)
-                total_errors += int((pred != target).sum().item())
+                pred = (logits > 0.0).float()  # (B, num_obs)
+                target_2d = target.view_as(pred)
+                total_graphs += pred.shape[0]
+                total_errors += int(
+                    (pred != target_2d).any(dim=1).sum().item()
+                )
         else:
             # logits: (E_total,), batch.y: (E_total,)
             loss = criterion(logits, batch.y)
 
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         optimizer.step()
 
         total_loss += loss.item()
@@ -364,9 +421,12 @@ def validate(
             target = batch.y
             loss = criterion(logits.view(-1), target)
 
-            pred = (logits.view(-1) > 0.0).float()
-            total_graphs += int(batch.num_graphs)
-            total_errors += int((pred != target).sum().item())
+            pred = (logits > 0.0).float()  # (B, num_obs)
+            target_2d = target.view_as(pred)
+            total_graphs += pred.shape[0]
+            total_errors += int(
+                (pred != target_2d).any(dim=1).sum().item()
+            )
         else:
             loss = criterion(logits, batch.y)
 
@@ -472,6 +532,32 @@ def load_checkpoint(
     }
 
 
+def _validate_resume_config(cfg: TrainConfig, ckpt_cfg: Dict[str, Any]) -> None:
+    """
+    Verify that resume checkpoint is compatible with current config.
+
+    Parameters
+    ----------
+    cfg : TrainConfig
+        Current training configuration.
+    ckpt_cfg : dict
+        Configuration stored in the checkpoint.
+
+    Raises
+    ------
+    ValueError
+        If any architecture parameter differs between configs.
+    """
+    for key in ("case", "hidden_dim", "num_layers"):
+        current = getattr(cfg, key)
+        saved = ckpt_cfg.get(key)
+        if saved is not None and saved != current:
+            raise ValueError(
+                f"Config mismatch on resume: {key}={current}, "
+                f"checkpoint has {key}={saved}"
+            )
+
+
 def _best_metric_key(case: Case) -> str:
     """
     Return the validation metric to use for checkpointing.
@@ -542,6 +628,10 @@ def train(cfg: TrainConfig) -> Path:
         split="val",
     )
 
+    # Fail-fast: validate data shapes before training
+    _validate_dataset(train_ds, "train")
+    _validate_dataset(val_ds, "val")
+
     # Optional sample cap for fast iteration
     if cfg.max_samples is not None:
         from torch.utils.data import Subset
@@ -553,6 +643,7 @@ def train(cfg: TrainConfig) -> Path:
         train_ds,
         batch_size=cfg.batch_size,
         shuffle=True,
+        drop_last=True,
         num_workers=cfg.num_workers,
         pin_memory=(device.type == "cuda"),
     )
@@ -586,7 +677,13 @@ def train(cfg: TrainConfig) -> Path:
         lr=cfg.lr,
         weight_decay=cfg.weight_decay,
     )
-    scheduler = CosineAnnealingLR(optimizer, T_max=cfg.epochs, eta_min=cfg.lr / 50)
+    eta_min = cfg.lr / 50
+    scheduler = CosineAnnealingLR(optimizer, T_max=cfg.epochs, eta_min=eta_min)
+    logger.info(
+        "Scheduler: CosineAnnealingLR(T_max=%d, eta_min=%.1e)",
+        cfg.epochs,
+        eta_min,
+    )
 
     # ── Loss ──────────────────────────────────────────────────────
 
@@ -607,6 +704,7 @@ def train(cfg: TrainConfig) -> Path:
 
     if cfg.resume is not None:
         ckpt_info = load_checkpoint(cfg.resume, model, optimizer, scheduler)
+        _validate_resume_config(cfg, ckpt_info["config"])
         start_epoch = ckpt_info["epoch"] + 1
         best_metric = ckpt_info["best_metric"]
         logger.info(
@@ -632,6 +730,7 @@ def train(cfg: TrainConfig) -> Path:
     metric_key = _best_metric_key(cfg.case)
     best_path = run_dir / "best.pt"
     history: list[Dict[str, Any]] = []
+    epochs_without_improvement = 0
 
     logger.info("Starting training: %d epochs", cfg.epochs)
 
@@ -639,19 +738,21 @@ def train(cfg: TrainConfig) -> Path:
         t0 = time.perf_counter()
 
         train_metrics = train_one_epoch(
-            model,
-            train_loader,
-            criterion,
-            optimizer,
-            device,
-            cfg.case,
+            model=model,
+            loader=train_loader,
+            criterion=criterion,
+            optimizer=optimizer,
+            device=device,
+            case=cfg.case,
+            max_grad_norm=cfg.max_grad_norm,
         )
+
         val_metrics = validate(
-            model,
-            val_loader,
-            criterion,
-            device,
-            cfg.case,
+            model=model,
+            loader=val_loader,
+            criterion=criterion,
+            device=device,
+            case=cfg.case,
         )
 
         scheduler.step()
@@ -663,15 +764,18 @@ def train(cfg: TrainConfig) -> Path:
         improved = current < best_metric
         if improved:
             best_metric = current
+            epochs_without_improvement = 0
             save_checkpoint(
-                best_path,
-                model,
-                optimizer,
-                scheduler,
-                epoch,
-                best_metric,
-                cfg,
+                path=best_path,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                epoch=epoch,
+                best_metric=best_metric,
+                config=cfg,
             )
+        else:
+            epochs_without_improvement += 1
 
         # Log
         marker = " *" if improved else ""
@@ -696,6 +800,15 @@ def train(cfg: TrainConfig) -> Path:
                 "best": improved,
             }
         )
+
+        # Early stopping
+        if cfg.patience > 0 and epochs_without_improvement >= cfg.patience:
+            logger.info(
+                "Early stopping at epoch %d (%d epochs without improvement)",
+                epoch + 1,
+                cfg.patience,
+            )
+            break
 
     # ── Save history ──────────────────────────────────────────────
 
