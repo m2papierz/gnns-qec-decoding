@@ -67,7 +67,7 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
         "-c",
         "--config",
         type=Path,
-        default=None,
+        default=Path("configs/train.yaml"),
         help="YAML config file (CLI args override config values)",
     )
     parser.add_argument(
@@ -129,9 +129,14 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
     args = parser.parse_args(argv)
     setup_logging(verbose=args.verbose)
 
-    # Start from YAML if provided, else from defaults
-    if args.config is not None:
+    # Start from YAML if provided/exists, else from defaults
+    if args.config is not None and args.config.is_file():
         cfg = TrainConfig.from_yaml(args.config)
+    elif args.config is not None and not args.config.is_file():
+        logging.getLogger(__name__).warning(
+            "Config file %s not found, using defaults", args.config
+        )
+        cfg = TrainConfig()
     else:
         cfg = TrainConfig()
 
