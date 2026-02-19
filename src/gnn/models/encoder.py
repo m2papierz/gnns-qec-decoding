@@ -17,17 +17,28 @@ from torch_geometric.nn import GINEConv, LayerNorm
 
 class _GINEBlock(nn.Module):
     """
-    Single GINEConv layer with residual connection, norm, and dropout.
+    Single GINEConv layer with per-layer edge projection, residual
+    connection, norm, and dropout.
+
+    Each block projects raw edge features independently, allowing the
+    network to learn layer-specific edge representations.
 
     Parameters
     ----------
     hidden_dim : int
-        Dimensionality of node and edge embeddings.
+        Dimensionality of node embeddings.
+    edge_dim : int
+        Dimensionality of *raw* edge features (before projection).
     dropout : float
-        Dropout probability applied after activation.
+        Dropout probability applied after norm.
     """
 
-    def __init__(self, hidden_dim: int, dropout: float = 0.1) -> None:
+    def __init__(
+        self,
+        hidden_dim: int,
+        edge_dim: int,
+        dropout: float = 0.1,
+    ) -> None:
         super().__init__()
 
         mlp = nn.Sequential(
@@ -36,6 +47,7 @@ class _GINEBlock(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
         )
         self.conv = GINEConv(nn=mlp, edge_dim=hidden_dim)
+        self.edge_proj = nn.Linear(edge_dim, hidden_dim)
         self.norm = LayerNorm(hidden_dim)
         self.dropout = nn.Dropout(dropout)
 
@@ -54,18 +66,18 @@ class _GINEBlock(nn.Module):
             Node embeddings.
         edge_index : Tensor, shape (2, E)
             Edge indices in COO format.
-        edge_attr : Tensor, shape (E, hidden_dim)
-            Projected edge features.
+        edge_attr : Tensor, shape (E, edge_dim)
+            *Raw* edge features (projected internally per layer).
 
         Returns
         -------
         Tensor, shape (N, hidden_dim)
             Updated node embeddings.
         """
+        e = self.edge_proj(edge_attr)
         residual = x
-        x = self.conv(x, edge_index, edge_attr)
+        x = self.conv(x, edge_index, e)
         x = self.norm(x)
-        x = torch.relu(x)
         x = self.dropout(x)
         x = x + residual
         return x
@@ -80,6 +92,9 @@ class DetectorGraphEncoder(nn.Module):
     embedding per node. Downstream heads consume these embeddings for
     graph-level classification, edge-level prediction, or weight
     rewriting.
+
+    Each message-passing layer independently projects raw edge features,
+    allowing layer-specific edge representations.
 
     Parameters
     ----------
@@ -100,10 +115,9 @@ class DetectorGraphEncoder(nn.Module):
     ----------
     node_proj : nn.Linear
         Projects raw node features to ``hidden_dim``.
-    edge_proj : nn.Linear
-        Projects raw edge attributes to ``hidden_dim``.
     layers : nn.ModuleList
-        Sequence of :class:`_GINEBlock` message-passing layers.
+        Sequence of :class:`_GINEBlock` message-passing layers, each
+        with its own edge projection.
 
     Examples
     --------
@@ -137,13 +151,15 @@ class DetectorGraphEncoder(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
 
-        # Input projections
+        # Input projection for node features
         self.node_proj = nn.Linear(node_dim, hidden_dim)
-        self.edge_proj = nn.Linear(edge_dim, hidden_dim)
 
-        # Message-passing layers
+        # Message-passing layers (each with own edge projection)
         self.layers = nn.ModuleList(
-            [_GINEBlock(hidden_dim, dropout=dropout) for _ in range(num_layers)]
+            [
+                _GINEBlock(hidden_dim, edge_dim=edge_dim, dropout=dropout)
+                for _ in range(num_layers)
+            ]
         )
 
     def forward(
@@ -175,9 +191,8 @@ class DetectorGraphEncoder(nn.Module):
             graph-level pooling, edge-level prediction, etc.
         """
         h = self.node_proj(x)
-        e = self.edge_proj(edge_attr)
 
         for layer in self.layers:
-            h = layer(h, edge_index, e)
+            h = layer(h, edge_index, edge_attr)
 
         return h

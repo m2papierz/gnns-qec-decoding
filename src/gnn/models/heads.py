@@ -26,7 +26,7 @@ from typing import Literal
 import torch
 import torch.nn as nn
 from torch_geometric.data import Batch
-from torch_geometric.nn import global_mean_pool
+from torch_geometric.nn import global_add_pool, global_max_pool
 
 from gnn.models.encoder import DetectorGraphEncoder
 
@@ -35,8 +35,9 @@ class LogicalHead(nn.Module):
     """
     Graph-level head for predicting logical observable flips.
 
-    Pools node embeddings into a single graph-level vector via mean
-    pooling, then maps through a two-layer MLP to produce one logit
+    Pools node embeddings via concatenation of additive and max pooling
+    (preserving both signal magnitude and peak activations from sparse
+    syndromes), then maps through a two-layer MLP to produce one logit
     per logical observable.
 
     Parameters
@@ -68,7 +69,7 @@ class LogicalHead(nn.Module):
         super().__init__()
 
         self.mlp = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(2 * hidden_dim, hidden_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, num_observables),
@@ -97,7 +98,9 @@ class LogicalHead(nn.Module):
         Tensor, shape (B, num_observables)
             Raw logits (pre-sigmoid) per graph.
         """
-        graph_emb = global_mean_pool(h, batch)  # (B, hidden_dim)
+        g_add = global_add_pool(h, batch)  # (B, hidden_dim)
+        g_max = global_max_pool(h, batch)  # (B, hidden_dim)
+        graph_emb = torch.cat([g_add, g_max], dim=-1)  # (B, 2 * hidden_dim)
         return self.mlp(graph_emb)
 
 
@@ -105,9 +108,11 @@ class EdgeHead(nn.Module):
     """
     Per-edge head for predicting edge activations.
 
-    For each directed edge ``(u, v)``, concatenates the endpoint node
-    embeddings with the *raw* edge attributes and maps through a
-    two-layer MLP to produce a single logit.
+    For each directed edge ``(u, v)``, computes a symmetric
+    representation ``[h_u + h_v, |h_u - h_v|, edge_attr]`` and maps
+    through a two-layer MLP to produce a single logit. The symmetric
+    form ensures that the same undirected edge gets consistent
+    predictions regardless of direction.
 
     Used by both ``mwpm_teacher`` (supervised by MWPM edge selections)
     and ``hybrid`` (logits converted to MWPM weights at eval time).
@@ -181,7 +186,9 @@ class EdgeHead(nn.Module):
         """
         h_u = h[edge_index[0]]  # (E, hidden_dim)
         h_v = h[edge_index[1]]  # (E, hidden_dim)
-        inp = torch.cat([h_u, h_v, edge_attr], dim=-1)  # (E, 2H + edge_dim)
+        sym_sum = h_u + h_v  # (E, hidden_dim)
+        sym_diff = (h_u - h_v).abs()  # (E, hidden_dim)
+        inp = torch.cat([sym_sum, sym_diff, edge_attr], dim=-1)
         return self.mlp(inp).squeeze(-1)  # (E,)
 
 
