@@ -339,9 +339,7 @@ def train_one_epoch(
                 pred = (logits > 0.0).float()  # (B, num_obs)
                 target_2d = target.view_as(pred)
                 total_graphs += pred.shape[0]
-                total_errors += int(
-                    (pred != target_2d).any(dim=1).sum().item()
-                )
+                total_errors += int((pred != target_2d).any(dim=1).sum().item())
         else:
             # logits: (E_total,), batch.y: (E_total,)
             loss = criterion(logits, batch.y)
@@ -412,9 +410,7 @@ def validate(
             pred = (logits > 0.0).float()  # (B, num_obs)
             target_2d = target.view_as(pred)
             total_graphs += pred.shape[0]
-            total_errors += int(
-                (pred != target_2d).any(dim=1).sum().item()
-            )
+            total_errors += int((pred != target_2d).any(dim=1).sum().item())
         else:
             loss = criterion(logits, batch.y)
 

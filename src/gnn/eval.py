@@ -742,9 +742,7 @@ def print_report(report: EvalReport) -> None:
     lines.append(header)
     lines.append(sep)
 
-    sorted_results = sorted(
-        results, key=lambda r: (r.distance, r.rounds, r.error_prob)
-    )
+    sorted_results = sorted(results, key=lambda r: (r.distance, r.rounds, r.error_prob))
 
     prev_d = None
     total_gnn_better = 0
