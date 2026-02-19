@@ -661,7 +661,10 @@ def _eval_edge_case(
             cache_key = weights.tobytes()
             if cache_key not in matching_cache:
                 matching_cache[cache_key] = _build_matching_from_weights(
-                    und_pairs, weights, num_detectors, has_boundary,
+                    und_pairs,
+                    weights,
+                    num_detectors,
+                    has_boundary,
                     num_observables=num_observables,
                     edge_obs_map=edge_obs_map,
                 )
@@ -806,7 +809,9 @@ def evaluate_all(
                 else:
                     logger.warning(
                         "DEM not found for d=%d r=%d p=%s",
-                        meta.distance, meta.rounds, meta.error_prob,
+                        meta.distance,
+                        meta.rounds,
+                        meta.error_prob,
                     )
 
             num_shots, num_errors, edge_acc = _eval_edge_case(
