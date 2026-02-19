@@ -35,7 +35,7 @@ edge_pos_weight: null
 max_grad_norm: 1.0
 
 # Early stopping (0 = disabled)
-patience: 35
+patience: 100
 
 # Reproducibility
 seed: 42

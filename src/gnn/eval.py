@@ -6,9 +6,9 @@ with optional comparison against MWPM baseline results.
 
 Three evaluation protocols match the three training cases:
 
-- ``logical_head``: threshold graph-level logits at 0 → observable flip.
-- ``mwpm_teacher``: convert per-edge logits to MWPM weights → decode
-  with PyMatching → LER.  Also reports edge accuracy for diagnostics.
+- ``logical_head``: threshold graph-level logits at 0 => observable flip.
+- ``mwpm_teacher``: convert per-edge logits to MWPM weights => decode
+  with PyMatching => LER.  Also reports edge accuracy for diagnostics.
 - ``hybrid``: identical to ``mwpm_teacher`` (same architecture, same
   eval path).
 """
@@ -25,7 +25,7 @@ from typing import Any, Dict, List
 import numpy as np
 import pymatching
 import torch
-from torch_geometric.data import Batch, Data
+from torch_geometric.data import Batch
 from tqdm import tqdm
 
 from gnn.models.heads import Case, QECDecoder, build_model
@@ -274,18 +274,20 @@ def _build_batch(
     end: int,
 ) -> Batch:
     """
-    Build a PyG Batch from a slice of syndrome shots.
+    Build a PyG Batch from a slice of syndrome shots (vectorized).
 
     All shots share the same graph structure; only node features differ.
+    Constructs the batch directly with tensor ops instead of iterating
+    over individual Data objects.
 
     Parameters
     ----------
     syndrome : ndarray, shape (N, num_detectors)
         Full syndrome array.
     edge_index : Tensor, shape (2, E)
-        Graph edges (shared).
+        Graph edges (shared across shots).
     edge_attr : Tensor, shape (E, 2)
-        Edge attributes (shared).
+        Edge attributes (shared across shots).
     num_nodes : int
         Total node count (detectors + boundary).
     num_detectors : int
@@ -298,22 +300,35 @@ def _build_batch(
     Batch
         Batched PyG graphs ready for model forward.
     """
-    data_list = []
-    for i in range(start, end):
-        det = torch.from_numpy(syndrome[i].astype(np.float32)).view(-1, 1)
-        if num_nodes > num_detectors:
-            pad = torch.zeros(num_nodes - num_detectors, 1)
-            det = torch.cat([det, pad], dim=0)
+    n = end - start
+    num_edges = edge_index.shape[1]
 
-        data_list.append(
-            Data(
-                x=det,
-                edge_index=edge_index,
-                edge_attr=edge_attr,
-            )
-        )
+    # Node features: (n, num_detectors) => pad => (n, num_nodes) => (n*num_nodes, 1)
+    det = torch.from_numpy(
+        syndrome[start:end].astype(np.float32, copy=False)
+    )  # (n, num_detectors)
+    if num_nodes > num_detectors:
+        pad = torch.zeros(n, num_nodes - num_detectors, dtype=torch.float32)
+        det = torch.cat([det, pad], dim=1)  # (n, num_nodes)
+    x = det.reshape(-1, 1)  # (n * num_nodes, 1)
 
-    return Batch.from_data_list(data_list)
+    # Replicate edge_index with per-graph node offsets
+    offsets = torch.arange(n, dtype=torch.long).unsqueeze(1) * num_nodes  # (n, 1)
+    ei_rep = edge_index.unsqueeze(0).expand(n, -1, -1) + offsets.unsqueeze(1)
+    ei_batch = ei_rep.permute(1, 0, 2).reshape(2, -1)  # (2, n * E)
+
+    # Replicate edge_attr
+    ea_batch = edge_attr.unsqueeze(0).expand(n, -1, -1).reshape(-1, edge_attr.shape[1])
+
+    # Batch vector
+    batch_vec = torch.arange(n, dtype=torch.long).repeat_interleave(num_nodes)
+
+    return Batch(
+        x=x,
+        edge_index=ei_batch,
+        edge_attr=ea_batch,
+        batch=batch_vec,
+    )
 
 
 @torch.no_grad()
@@ -443,6 +458,57 @@ def _build_matching_from_weights(
     return m
 
 
+def _logits_to_weights(logits: np.ndarray) -> np.ndarray:
+    """
+    Convert raw logits to MWPM-compatible positive weights.
+
+    Maps logit => sigmoid => log-likelihood ratio, clamped to positive.
+
+    Parameters
+    ----------
+    logits : ndarray
+        Raw model logits (any shape).
+
+    Returns
+    -------
+    ndarray
+        Positive MWPM weights (same shape).
+    """
+    prob = 1.0 / (1.0 + np.exp(-logits))
+    prob = np.clip(prob, 1e-7, 1.0 - 1e-7)
+    weights = np.log((1.0 - prob) / prob)
+    return np.maximum(weights, 1e-8)
+
+
+def _directed_to_undirected_logits(
+    directed_logits: np.ndarray,
+    dir_to_undir: np.ndarray,
+    num_undirected: int,
+) -> np.ndarray:
+    """
+    Average directed edge logits into undirected edge logits.
+
+    Parameters
+    ----------
+    directed_logits : ndarray, shape (E,)
+        Per-directed-edge logits for a single graph.
+    dir_to_undir : ndarray, shape (E,)
+        Mapping from directed to undirected edge index.
+    num_undirected : int
+        Number of unique undirected edges.
+
+    Returns
+    -------
+    ndarray, shape (num_undirected,)
+        Mean logit per undirected edge.
+    """
+    logit_sum = np.zeros(num_undirected, dtype=np.float64)
+    logit_count = np.zeros(num_undirected, dtype=np.int32)
+    np.add.at(logit_sum, dir_to_undir, directed_logits)
+    np.add.at(logit_count, dir_to_undir, 1)
+    return logit_sum / np.maximum(logit_count, 1)
+
+
 @torch.no_grad()
 def _eval_edge_case(
     model: QECDecoder,
@@ -459,10 +525,12 @@ def _eval_edge_case(
     batch_size: int = 256,
 ) -> tuple[int, int, float]:
     """
-    Evaluate edge case: GNN-predicted weights → PyMatching → LER.
+    Evaluate edge case: per-shot GNN weights => PyMatching => LER.
 
-    Collects per-edge logits across all shots, averages per undirected
-    edge, converts to MWPM weights, and decodes with PyMatching.
+    For each shot, the model produces syndrome-conditional edge logits.
+    These are converted to MWPM weights and decoded individually,
+    preserving the model's ability to produce different weights for
+    different syndromes.
 
     Parameters
     ----------
@@ -492,16 +560,19 @@ def _eval_edge_case(
     num_shots : int
     num_errors : int
     edge_acc : float
-        Mean per-edge binary accuracy (against MWPM teacher labels
-        if available in batch.y, otherwise NaN).
+        NaN (teacher labels not available in this eval path).
     """
     n = syndrome.shape[0]
+    edges_per_graph = edge_index_np.shape[1]
     und_pairs, dir_to_undir = _undirected_edges(edge_index_np)
     num_und = und_pairs.shape[0]
 
-    # Accumulate edge logits to compute per-undirected-edge mean
-    logit_sum = np.zeros(num_und, dtype=np.float64)
-    logit_count = np.zeros(num_und, dtype=np.int64)
+    predicted = np.empty((n, num_observables), dtype=np.uint8)
+
+    # Cache: weight tuple => Matching object (avoids rebuilding for
+    # identical weight vectors, which happen when syndromes produce
+    # similar logit patterns).
+    matching_cache: Dict[bytes, pymatching.Matching] = {}
 
     for off in range(0, n, batch_size):
         end = min(off + batch_size, n)
@@ -519,41 +590,30 @@ def _eval_edge_case(
         logits = model(batch)  # (E_total,)
         logits_np = logits.cpu().numpy()
 
-        # PyG batching repeats edge_index for each graph in the batch;
-        # the dir_to_undir mapping repeats identically per graph.
         num_graphs = end - off
-        edges_per_graph = edge_index_np.shape[1]
 
         for g in range(num_graphs):
             start_e = g * edges_per_graph
             end_e = start_e + edges_per_graph
             graph_logits = logits_np[start_e:end_e]
 
-            # Map directed → undirected, accumulate
-            np.add.at(logit_sum, dir_to_undir, graph_logits)
-            np.add.at(logit_count, dir_to_undir, 1)
+            # Directed => undirected mean => weights
+            und_logits = _directed_to_undirected_logits(
+                graph_logits, dir_to_undir, num_und
+            )
+            weights = _logits_to_weights(und_logits)
 
-    # Mean logit per undirected edge
-    safe_count = np.maximum(logit_count, 1)
-    mean_logit = logit_sum / safe_count
+            # Cache matching by weight vector bytes
+            cache_key = weights.tobytes()
+            if cache_key not in matching_cache:
+                matching_cache[cache_key] = _build_matching_from_weights(
+                    und_pairs, weights, num_detectors, has_boundary
+                )
+            matching = matching_cache[cache_key]
 
-    # Convert: logit → probability → MWPM weight
-    prob = 1.0 / (1.0 + np.exp(-mean_logit))  # sigmoid
-    prob = np.clip(prob, 1e-7, 1.0 - 1e-7)
-    weights = np.log((1.0 - prob) / prob)  # log-likelihood ratio
-    weights = np.maximum(weights, 1e-8)  # MWPM needs positive weights
-
-    # Build decoder and decode
-    matching = _build_matching_from_weights(
-        und_pairs, weights, num_detectors, has_boundary
-    )
-
-    predicted = np.empty((n, num_observables), dtype=np.uint8)
-    chunk = min(n, 10_000)
-    for off in range(0, n, chunk):
-        end = min(off + chunk, n)
-        batch_syn = syndrome[off:end]
-        predicted[off:end] = matching.decode_batch(batch_syn)[:, :num_observables]
+            shot_syn = syndrome[off + g]
+            pred = matching.decode(shot_syn)
+            predicted[off + g] = pred[:num_observables]
 
     shot_errors = np.any(predicted != logical, axis=1)
     num_errors = int(shot_errors.sum())
@@ -694,7 +754,7 @@ def evaluate_all(
 
 def print_report(report: EvalReport) -> None:
     """
-    Print a formatted summary table to stdout.
+    Log a formatted summary table.
 
     Parameters
     ----------
@@ -718,14 +778,18 @@ def print_report(report: EvalReport) -> None:
         header = f"{'d':>3} {'r':>4} {'p':>9} " f"{'shots':>7} {'GNN_LER':>10}"
 
     sep = "-" * len(header)
+    lines: list[str] = []
 
-    print(f"\n{sep}")
-    print(f"GNN Evaluation — {case}")
-    print(sep)
-    print(header)
-    print(sep)
+    lines.append("")
+    lines.append(sep)
+    lines.append(f"GNN Evaluation — {case}")
+    lines.append(sep)
+    lines.append(header)
+    lines.append(sep)
 
-    sorted_results = sorted(results, key=lambda r: (r.distance, r.rounds, r.error_prob))
+    sorted_results = sorted(
+        results, key=lambda r: (r.distance, r.rounds, r.error_prob)
+    )
 
     prev_d = None
     total_gnn_better = 0
@@ -733,7 +797,7 @@ def print_report(report: EvalReport) -> None:
 
     for r in sorted_results:
         if prev_d is not None and r.distance != prev_d:
-            print()
+            lines.append("")
         prev_d = r.distance
 
         if has_baseline and r.mwpm_ler is not None:
@@ -743,28 +807,28 @@ def print_report(report: EvalReport) -> None:
                 marker = " *"  # GNN is better
                 total_gnn_better += 1
             total_compared += 1
-            print(
+            lines.append(
                 f"{r.distance:>3} {r.rounds:>4} {r.error_prob:>9.5f} "
                 f"{r.num_shots:>7} {r.logical_error_rate:>10.6f} "
                 f"{r.mwpm_ler:>10.6f} {delta:>+8.4f}{marker}"
             )
         else:
-            print(
+            lines.append(
                 f"{r.distance:>3} {r.rounds:>4} {r.error_prob:>9.5f} "
                 f"{r.num_shots:>7} {r.logical_error_rate:>10.6f}"
             )
 
-    print(sep)
+    lines.append(sep)
 
     # Summary
     if has_baseline and total_compared > 0:
-        print(
+        lines.append(
             f"\nGNN better in {total_gnn_better}/{total_compared} settings "
             f"(marked with *)"
         )
 
     # Per-distance summary
-    print("\nSummary by distance:")
+    lines.append("\nSummary by distance:")
     for d in sorted(set(r.distance for r in results)):
         subset = [r for r in results if r.distance == d]
         lers = [r.logical_error_rate for r in subset]
@@ -778,9 +842,14 @@ def print_report(report: EvalReport) -> None:
             bl_lers = [r.mwpm_ler for r in subset if r.mwpm_ler is not None]
             if bl_lers:
                 line += f"  (MWPM mean={np.mean(bl_lers):.6f})"
-        print(line)
+        lines.append(line)
 
-    print()
+    lines.append("")
+
+    output = "\n".join(lines)
+    # Log and print so output is captured regardless of logging config
+    logger.info("Evaluation results:\n%s", output)
+    print(output)
 
 
 def save_report(report: EvalReport, path: Path) -> None:

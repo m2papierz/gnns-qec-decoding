@@ -10,7 +10,7 @@ Examples
     uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \\
         --baseline outputs/results/mwpm_baseline.json
 
-    # Save JSON report
+    # Save JSON report to custom path
     uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \\
         -o outputs/results/gnn_logical.json
 """
@@ -96,7 +96,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--output",
         type=Path,
         default=None,
-        help="Save JSON report to this path",
+        help="Save JSON report to this path (default: next to checkpoint)",
     )
     parser.add_argument(
         "-v",
@@ -123,8 +123,11 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     print_report(report)
 
-    if args.output is not None:
-        save_report(report, args.output)
+    # Always save report: explicit path or default next to checkpoint
+    output_path = args.output
+    if output_path is None:
+        output_path = args.checkpoint.parent / f"eval_{args.split}.json"
+    save_report(report, output_path)
 
 
 if __name__ == "__main__":
