@@ -11,39 +11,45 @@ prediction head differs.
                        ┌─────────────────────────────────────────────┐
                        │              QECDecoder                     │
                        │                                             │
-Batch ──► encoder ──► h│──► LogicalHead ──► (B, num_obs)             │
-          (shared)     │    global_mean_pool => MLP                  │
+Batch ──► encoder ──►(h, edge_h)                                     │
+          (shared)     │                                             │
+                       │──► LogicalHead ──► (B, num_obs)             │
+                       │    attn_pool ‖ max_pool ‖ edge_pool => MLP  │
                        │                                             │
                        │──► EdgeHead ──► (E_total,)                  │
-                       │    [h_u ‖ h_v ‖ edge_attr] => MLP           │
+                       │    [h_u+h_v ‖ |h_u−h_v| ‖ edge_h] => MLP    │
                        └─────────────────────────────────────────────┘
 ```
 
 ### Encoder (`models/encoder.py`)
 
 `DetectorGraphEncoder` runs several rounds of GINEConv message passing
-on the detector graph.
+on the detector graph with explicit edge co-evolution: each layer
+updates both node embeddings and edge embeddings.
 
 | Component | Choice | Rationale |
 |-----------|--------|-----------|
 | Convolution | GINEConv | Edge features (error prob, weight) enter messages natively; 1-WL expressiveness |
-| Normalisation | LayerNorm | Stable across variable graph sizes in a batch (d=3 and d=7 mixed) |
-| Skip connections | Additive residual per layer | Enables deeper networks without degradation |
-| Edge projection | Single linear before layer 1 | Edge attributes are static — no need to re-project per layer |
+| Edge update | `MLP(h_src + h_dst, \|h_src − h_dst\|, e)` | Symmetric, learns edge representations jointly with nodes |
+| Normalisation | LayerNorm (nodes and edges) | Stable across variable graph sizes in a batch (d=3 and d=7 mixed) |
+| Skip connections | Additive residual per layer (nodes and edges) | Enables deeper networks without degradation |
+| Edge projection | Per-layer linear + accumulation | Each layer projects raw edge features and adds previous edge embeddings |
 
 Input/output:
 
 - **In**: `x (N, 1)` syndrome bits, `edge_attr (E, 2)` `[error_prob, weight]`
-- **Out**: `h (N, hidden_dim)` node embeddings
+- **Out**: `h (N, hidden_dim)` node embeddings, `edge_h (E, hidden_dim)` edge embeddings
 
 ### Heads (`models/heads.py`)
 
 **LogicalHead** — graph-level observable prediction:
-1. `global_mean_pool(h, batch)` => `(B, hidden_dim)`
-2. Two-layer MLP => `(B, num_observables)` logits
+1. Attention-weighted sum pooling over nodes => `(B, H)`
+2. Max pooling over nodes => `(B, H)`
+3. Mean pooling over edge embeddings per graph => `(B, H)`
+4. Concatenate all three => two-layer MLP => `(B, num_observables)` logits
 
 **EdgeHead** — per-edge prediction (used by both `mwpm_teacher` and `hybrid`):
-1. Concatenate `[h_u, h_v, edge_attr]` per edge => `(E, 2H + edge_dim)`
+1. Symmetric node pair: `[h_u + h_v, |h_u − h_v|, edge_h]` => `(E, 3H)`
 2. Two-layer MLP => `(E,)` logits
 
 ### Factory
@@ -107,13 +113,14 @@ Programmatic access: `TrainConfig.from_yaml("configs/train.yaml")`.
 | Case | Loss | Details |
 |------|------|---------|
 | `logical_head` | `BCEWithLogitsLoss` | Graph-level: logits vs observable ground truth |
-| `mwpm_teacher` | `BCEWithLogitsLoss` + `pos_weight` | Per-edge: logits vs MWPM selections. Extreme class imbalance (most edges are 0), so `pos_weight` is auto-estimated from training data |
+| `mwpm_teacher` | `_GraphNormalizedBCE` + `pos_weight` | Per-edge BCE averaged within each graph, then across graphs. Prevents larger graphs (higher `d`) from dominating gradients. `pos_weight` auto-estimated from training data |
 | `hybrid` | Same as `mwpm_teacher` | Same architecture and loss; different evaluation |
 
 ### Training details
 
 - **Optimiser**: AdamW (lr=1e-3, weight_decay=1e-4)
-- **Scheduler**: Cosine annealing to lr/50 over all epochs
+- **Scheduler**: Linear warmup (5% of epochs, from 1% of peak lr) followed by cosine annealing to lr/50
+- **Mixed precision**: AMP enabled automatically on CUDA (GradScaler + autocast)
 - **Checkpointing**: saves `best.pt` when validation metric improves
   - `logical_head`: tracks validation LER (lower is better)
   - edge cases: tracks validation loss (lower is better)
@@ -135,7 +142,7 @@ outputs/runs/{case}/
 | `hidden_dim` | 64 | Embedding dimensionality |
 | `num_layers` | 4 | Message-passing depth |
 | `dropout` | 0.1 | Applied in encoder and heads |
-| `lr` | 1e-3 | Initial learning rate |
+| `lr` | 1e-3 | Peak learning rate (after warmup) |
 | `weight_decay` | 1e-4 | AdamW L2 regularisation |
 | `epochs` | 100 | |
 | `batch_size` | 64 | Graphs per batch |
