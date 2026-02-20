@@ -24,99 +24,15 @@ from typing import Any, Dict, List
 
 import numpy as np
 import pymatching
-import stim
 import torch
 from torch_geometric.data import Batch
 from tqdm import tqdm
 
 from gnn.models.heads import Case, QECDecoder, build_model
+from qec_generator.utils import read_json, undirected_edges
 
 
 logger = logging.getLogger(__name__)
-
-
-def _load_dem_for_setting(
-    raw_data_dir: Path,
-    distance: int,
-    rounds: int,
-    error_prob: float,
-) -> stim.DetectorErrorModel | None:
-    """
-    Load the detector error model for a setting from the raw data dir.
-
-    Returns None if the DEM file is not found.
-    """
-    p_tag = f"p{error_prob:.6g}".replace(".", "_")
-    dem_path = raw_data_dir / f"d{distance}_r{rounds}_{p_tag}" / "model.dem"
-    if not dem_path.exists():
-        return None
-    return stim.DetectorErrorModel.from_file(str(dem_path))
-
-
-def _extract_edge_obs_map(
-    dem: stim.DetectorErrorModel,
-    und_pairs: np.ndarray,
-    num_detectors: int,
-    has_boundary: bool,
-) -> dict[int, list[int]]:
-    """
-    Extract which observables each undirected edge is associated with.
-
-    Builds a reference matching from the DEM, reads its networkx graph
-    to identify per-edge fault_ids (observable associations), then maps
-    them back to the undirected edge indices used in ``_eval_edge_case``.
-
-    Returns
-    -------
-    dict[int, list[int]]
-        Mapping from undirected edge index to list of observable IDs.
-        Only edges that affect at least one observable are included.
-    """
-    ref_matching = pymatching.Matching.from_detector_error_model(dem)
-    ref_G = ref_matching.to_networkx()
-
-    boundary_idx = num_detectors if has_boundary else None
-
-    def _is_boundary(n: object) -> bool:
-        return bool(ref_G.nodes[n].get("is_boundary", False))
-
-    # Build node mapping: collapse all boundary nodes → boundary_idx
-    node_map: dict[object, int | None] = {}
-    for n in ref_G.nodes:
-        if not _is_boundary(n):
-            node_map[n] = int(n)
-        elif has_boundary:
-            node_map[n] = boundary_idx
-        else:
-            node_map[n] = None
-
-    # Build reverse lookup: (min_u, max_v) → undirected edge index
-    pair_to_idx: dict[tuple[int, int], int] = {}
-    for idx in range(und_pairs.shape[0]):
-        u, v = int(und_pairs[idx, 0]), int(und_pairs[idx, 1])
-        key = (min(u, v), max(u, v))
-        pair_to_idx[key] = idx
-
-    # Collect observable associations from ref matching edges
-    edge_obs: dict[int, list[int]] = {}
-    for u, v, data in ref_G.edges(data=True):
-        iu, iv = node_map.get(u), node_map.get(v)
-        if iu is None or iv is None or iu == iv:
-            continue
-
-        fault_ids = data.get("fault_ids", set())
-        if not fault_ids:
-            continue
-
-        key = (min(iu, iv), max(iu, iv))
-        eidx = pair_to_idx.get(key)
-        if eidx is not None:
-            # Merge observable IDs (may come from multiple collapsed boundary edges)
-            existing = set(edge_obs.get(eidx, []))
-            existing.update(int(f) for f in fault_ids)
-            edge_obs[eidx] = sorted(existing)
-
-    return edge_obs
 
 
 @dataclass
@@ -246,10 +162,6 @@ def load_model(
     return model, cfg
 
 
-def _read_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 @dataclass
 class _SettingMeta:
     """Internal metadata for one setting."""
@@ -282,7 +194,7 @@ def _load_settings(datasets_dir: Path, case: str) -> List[_SettingMeta]:
         Per-setting metadata.
     """
     case_root = datasets_dir / case
-    settings_obj = _read_json(case_root / "settings.json")
+    settings_obj = read_json(case_root / "settings.json")
 
     metas = []
     for s in settings_obj["settings"]:
@@ -478,21 +390,11 @@ def _eval_logical_head(
     return n, num_errors
 
 
-def _undirected_edges(edge_index: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Return (unique undirected pairs, directed=>undirected index map)."""
-    src, dst = edge_index[0], edge_index[1]
-    pairs = np.stack([np.minimum(src, dst), np.maximum(src, dst)], axis=1)
-    unique, inverse = np.unique(pairs, axis=0, return_inverse=True)
-    return unique.astype(np.int64), inverse.astype(np.int64)
-
-
 def _build_matching_from_weights(
     und_pairs: np.ndarray,
     weights: np.ndarray,
     num_detectors: int,
     has_boundary: bool,
-    num_observables: int = 0,
-    edge_obs_map: dict[int, list[int]] | None = None,
 ) -> pymatching.Matching:
     """
     Build PyMatching decoder from predicted undirected edge weights.
@@ -507,13 +409,6 @@ def _build_matching_from_weights(
         Number of detector nodes.
     has_boundary : bool
         Whether the graph includes a boundary node.
-    num_observables : int
-        Number of logical observables.  Required for correct ``decode()``
-        output shape.
-    edge_obs_map : dict or None
-        Mapping from undirected edge index to list of observable IDs.
-        Obtained from :func:`_extract_edge_obs_map`.  If None, no
-        observables are tracked (decode returns empty array).
 
     Returns
     -------
@@ -526,17 +421,13 @@ def _build_matching_from_weights(
     for eid in range(und_pairs.shape[0]):
         u, v = int(und_pairs[eid, 0]), int(und_pairs[eid, 1])
         w = float(max(weights[eid], 1e-8))  # clamp to avoid zero weight
-        obs_ids = set(edge_obs_map.get(eid, [])) if edge_obs_map else set()
 
         if boundary_node is not None and boundary_node in (u, v):
             det = v if u == boundary_node else u
             if 0 <= det < num_detectors:
-                m.add_boundary_edge(det, weight=w, fault_ids=obs_ids)
+                m.add_boundary_edge(det, weight=w)
         elif u < num_detectors and v < num_detectors:
-            m.add_edge(u, v, weight=w, fault_ids=obs_ids)
-
-    if num_observables > 0:
-        m.ensure_num_fault_ids(num_observables)
+            m.add_edge(u, v, weight=w)
 
     return m
 
@@ -575,7 +466,6 @@ def _eval_edge_case(
     has_boundary: bool,
     num_observables: int,
     device: torch.device,
-    edge_obs_map: dict[int, list[int]] | None = None,
     batch_size: int = 256,
 ) -> tuple[int, int, float]:
     """
@@ -618,7 +508,7 @@ def _eval_edge_case(
     """
     n = syndrome.shape[0]
     edges_per_graph = edge_index_np.shape[1]
-    und_pairs, dir_to_undir = _undirected_edges(edge_index_np)
+    und_pairs, dir_to_undir = undirected_edges(edge_index_np)
     num_und = und_pairs.shape[0]
 
     predicted = np.empty((n, num_observables), dtype=np.uint8)
@@ -661,12 +551,7 @@ def _eval_edge_case(
             cache_key = weights.tobytes()
             if cache_key not in matching_cache:
                 matching_cache[cache_key] = _build_matching_from_weights(
-                    und_pairs,
-                    weights,
-                    num_detectors,
-                    has_boundary,
-                    num_observables=num_observables,
-                    edge_obs_map=edge_obs_map,
+                    und_pairs, weights, num_detectors, has_boundary
                 )
             matching = matching_cache[cache_key]
 
@@ -724,7 +609,7 @@ def evaluate_all(
     # Load MWPM baseline if provided
     baseline: Dict[tuple, float] = {}
     if baseline_path is not None and baseline_path.is_file():
-        bl = _read_json(baseline_path)
+        bl = read_json(baseline_path)
         for r in bl.get("results", []):
             key = (r["distance"], r["rounds"], r["error_prob"], r["split"])
             baseline[key] = r["logical_error_rate"]
@@ -741,28 +626,6 @@ def evaluate_all(
             "device": str(device),
         }
     )
-
-    # For edge cases, load raw_data_dir to access DEMs for observable mapping
-    raw_data_dir: Path | None = None
-    if case != "logical_head":
-        build_meta_path = datasets_dir / case / "build_meta.json"
-        if build_meta_path.is_file():
-            bm = _read_json(build_meta_path)
-            candidate = Path(bm.get("raw_data_dir", ""))
-            if candidate.is_dir():
-                raw_data_dir = candidate
-                logger.info("Using raw_data_dir=%s for DEM loading", raw_data_dir)
-            else:
-                logger.warning(
-                    "raw_data_dir=%s not found; observable mapping unavailable. "
-                    "Edge-case eval may fail.",
-                    candidate,
-                )
-        else:
-            logger.warning(
-                "build_meta.json not found at %s; observable mapping unavailable.",
-                build_meta_path,
-            )
 
     for meta in tqdm(settings, desc="GNN eval", unit="setting"):
         t0 = time.perf_counter()
@@ -795,25 +658,6 @@ def evaluate_all(
             )
             edge_acc = None
         else:
-            # Extract observable mapping from DEM
-            edge_obs_map: dict[int, list[int]] | None = None
-            if raw_data_dir is not None:
-                dem = _load_dem_for_setting(
-                    raw_data_dir, meta.distance, meta.rounds, meta.error_prob
-                )
-                if dem is not None:
-                    und_pairs, _ = _undirected_edges(ei_np)
-                    edge_obs_map = _extract_edge_obs_map(
-                        dem, und_pairs, meta.num_detectors, meta.has_boundary
-                    )
-                else:
-                    logger.warning(
-                        "DEM not found for d=%d r=%d p=%s",
-                        meta.distance,
-                        meta.rounds,
-                        meta.error_prob,
-                    )
-
             num_shots, num_errors, edge_acc = _eval_edge_case(
                 model,
                 edge_index,
@@ -826,8 +670,7 @@ def evaluate_all(
                 meta.has_boundary,
                 meta.num_observables,
                 device,
-                edge_obs_map=edge_obs_map,
-                batch_size=batch_size,
+                batch_size,
             )
 
         elapsed = time.perf_counter() - t0
@@ -851,162 +694,6 @@ def evaluate_all(
         )
 
     return report
-
-
-class ValLEREstimator:
-    """
-    Lightweight LER estimator for monitoring during training.
-
-    Pre-loads graph structures, DEM observable mappings, and val data once
-    at init.  Call :meth:`compute` each epoch to get the current aggregate
-    logical error rate without rebuilding anything.
-
-    For ``logical_head``, decoding is a simple threshold — nearly free.
-    For edge cases, runs per-shot PyMatching on a capped subset of val.
-
-    Parameters
-    ----------
-    datasets_dir : Path
-        Root datasets directory.
-    case : str
-        Training case.
-    max_shots_per_setting : int
-        Cap on val shots per setting (keeps cost bounded).
-    batch_size : int
-        Shots per forward pass.
-    """
-
-    def __init__(
-        self,
-        datasets_dir: Path,
-        case: Case,
-        max_shots_per_setting: int = 500,
-        batch_size: int = 256,
-    ) -> None:
-        self.case = case
-        self.batch_size = batch_size
-        self._settings: List[Dict[str, Any]] = []
-
-        case_root = datasets_dir / case
-        settings_json = _read_json(case_root / "settings.json")
-
-        # For edge cases, locate raw_data_dir for DEM files
-        raw_data_dir: Path | None = None
-        if case != "logical_head":
-            bm_path = case_root / "build_meta.json"
-            if bm_path.is_file():
-                candidate = Path(_read_json(bm_path).get("raw_data_dir", ""))
-                if candidate.is_dir():
-                    raw_data_dir = candidate
-            if raw_data_dir is None:
-                logger.warning(
-                    "raw_data_dir not found — edge-case LER monitoring "
-                    "will not work."
-                )
-
-        total_shots = 0
-        for s in settings_json["settings"]:
-            g = s["graph"]
-            shard = case_root / "shards" / s["relpath"]
-            graph_dir = shard / "graph"
-
-            val_syn_path = shard / "val_syndrome.npy"
-            if not val_syn_path.exists():
-                continue
-
-            ei_np = np.load(graph_dir / "edge_index.npy").astype(np.int64)
-            ea_np = np.load(graph_dir / "edge_attr.npy").astype(np.float32)
-
-            syndrome = np.load(val_syn_path)
-            logical = np.load(shard / "val_logical.npy")
-            if logical.ndim == 1:
-                logical = logical[:, np.newaxis]
-
-            n = min(max_shots_per_setting, syndrome.shape[0])
-            total_shots += n
-
-            sd: Dict[str, Any] = {
-                "edge_index": torch.from_numpy(ei_np).long(),
-                "edge_attr": torch.from_numpy(ea_np).float(),
-                "ei_np": ei_np,
-                "syndrome": syndrome[:n].astype(np.uint8),
-                "logical": logical[:n].astype(np.uint8),
-                "num_nodes": int(g["num_nodes"]),
-                "num_detectors": int(g["num_detectors"]),
-                "has_boundary": bool(g.get("has_boundary", False)),
-                "num_observables": int(g.get("num_observables", 1)),
-                "edge_obs_map": None,
-            }
-
-            # Extract observable mapping from DEM for edge cases
-            if case != "logical_head" and raw_data_dir is not None:
-                dem = _load_dem_for_setting(
-                    raw_data_dir,
-                    int(s["distance"]),
-                    int(s["rounds"]),
-                    float(s["error_prob"]),
-                )
-                if dem is not None:
-                    und_pairs, _ = _undirected_edges(ei_np)
-                    sd["edge_obs_map"] = _extract_edge_obs_map(
-                        dem, und_pairs, sd["num_detectors"], sd["has_boundary"]
-                    )
-
-            self._settings.append(sd)
-
-        logger.info(
-            "ValLEREstimator ready: %d settings, %d total shots",
-            len(self._settings),
-            total_shots,
-        )
-
-    @torch.no_grad()
-    def compute(self, model: QECDecoder, device: torch.device) -> float:
-        """
-        Compute aggregate LER.  Puts model in eval mode, restores after.
-        """
-        was_training = model.training
-        model.eval()
-
-        total_shots = 0
-        total_errors = 0
-
-        for s in self._settings:
-            if self.case == "logical_head":
-                n, errs = _eval_logical_head(
-                    model,
-                    s["edge_index"],
-                    s["edge_attr"],
-                    s["syndrome"],
-                    s["logical"],
-                    s["num_nodes"],
-                    s["num_detectors"],
-                    device,
-                    self.batch_size,
-                )
-            else:
-                n, errs, _ = _eval_edge_case(
-                    model,
-                    s["edge_index"],
-                    s["edge_attr"],
-                    s["ei_np"],
-                    s["syndrome"],
-                    s["logical"],
-                    s["num_nodes"],
-                    s["num_detectors"],
-                    s["has_boundary"],
-                    s["num_observables"],
-                    device,
-                    edge_obs_map=s["edge_obs_map"],
-                    batch_size=self.batch_size,
-                )
-            total_shots += n
-            total_errors += errs
-
-        if was_training:
-            model.train()
-
-        return total_errors / max(total_shots, 1)
 
 
 def print_report(report: EvalReport) -> None:

@@ -32,11 +32,6 @@ def stable_seed(*parts: str, base: int | None) -> int | None:
     -------
     int or None
         Derived seed, or None if base is None.
-
-    Examples
-    --------
-    >>> stable_seed("split=train", "d=5", base=42)
-    12345678901234567890  # deterministic output
     """
     if base is None:
         return None
@@ -145,3 +140,25 @@ def ensure_dir(path: Path) -> Path:
     """
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def undirected_edges(edge_index: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Extract unique undirected edges and mapping from directed edges.
+
+    Parameters
+    ----------
+    edge_index : ndarray, shape (2, E)
+        Directed edge list.
+
+    Returns
+    -------
+    unique_pairs : ndarray, shape (U, 2)
+        Unique undirected edge pairs.
+    dir_to_undir : ndarray, shape (E,)
+        Mapping from directed edge index to undirected edge index.
+    """
+    src, dst = edge_index[0], edge_index[1]
+    pairs = np.stack([np.minimum(src, dst), np.maximum(src, dst)], axis=1)
+    unique, inverse = np.unique(pairs, axis=0, return_inverse=True)
+    return unique.astype(np.int64), inverse.astype(np.int64)

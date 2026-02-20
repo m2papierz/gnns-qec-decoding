@@ -8,19 +8,17 @@ safe (workers cannot share CUDA state).
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Literal, Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
 
-
-Case = Literal["logical_head", "mwpm_teacher", "hybrid"]
-Split = Literal["train", "val", "test"]
+from constants import Case, Split
+from qec_generator.utils import read_json
 
 
 @dataclass(frozen=True)
@@ -41,11 +39,6 @@ class SettingInfo:
     relpath: str
     num_nodes: int
     num_detectors: int
-
-
-def _read_json(path: Path) -> dict:
-    """Read a UTF-8 JSON file and return its contents as a dict."""
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _unpack_bits_row(packed_row: np.ndarray, num_bits: int) -> np.ndarray:
@@ -126,7 +119,7 @@ class MixedSurfaceCodeDataset(Dataset):
         self.splits_root = self.case_root / "splits"
 
         # Load settings table (setting_id → relpath + node counts)
-        settings_obj = _read_json(self.case_root / "settings.json")
+        settings_obj = read_json(self.case_root / "settings.json")
         self.settings: Dict[int, SettingInfo] = {}
         for s in settings_obj["settings"]:
             sid = int(s["setting_id"])
@@ -190,7 +183,7 @@ class MixedSurfaceCodeDataset(Dataset):
             sdir / f"{self.split}_mwpm_edge_selected_packed.npy", mmap_mode="r"
         )
         dir_to_undir = np.load(sdir / "mwpm" / "dir_to_undir.npy")
-        meta = _read_json(sdir / "mwpm" / "teacher_meta.json")
+        meta = read_json(sdir / "mwpm" / "teacher_meta.json")
         num_und = int(meta["num_undirected_edges"])
 
         self._mwpm_cache[sid] = (packed, dir_to_undir, num_und)

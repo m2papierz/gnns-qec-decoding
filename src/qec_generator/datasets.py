@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from constants import CASES, MWPM_BITORDER, MWPM_LABEL, SPLITS, Case
 from qec_generator.config import Config
-from qec_generator.utils import read_json, save_json, save_npy
+from qec_generator.utils import read_json, save_json, save_npy, undirected_edges
 
 
 logger = logging.getLogger(__name__)
@@ -129,28 +129,6 @@ def _copy_split(
     }
 
 
-def _undirected_edges(edge_index: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Extract unique undirected edges and mapping from directed edges.
-
-    Parameters
-    ----------
-    edge_index : ndarray, shape (2, E)
-        Directed edge list.
-
-    Returns
-    -------
-    unique_pairs : ndarray, shape (U, 2)
-        Unique undirected edge pairs.
-    dir_to_undir : ndarray, shape (E,)
-        Mapping from directed edge index to undirected edge index.
-    """
-    src, dst = edge_index[0], edge_index[1]
-    pairs = np.stack([np.minimum(src, dst), np.maximum(src, dst)], axis=1)
-    unique, inverse = np.unique(pairs, axis=0, return_inverse=True)
-    return unique.astype(np.int64), inverse.astype(np.int64)
-
-
 def _build_teacher_matching(
     und_pairs: np.ndarray,
     und_attr: np.ndarray,
@@ -231,7 +209,7 @@ def _write_mwpm_labels(
     edge_index = np.load(graph_dir / "edge_index.npy")
     edge_attr = np.load(graph_dir / "edge_attr.npy")
 
-    und_pairs, dir_to_undir = _undirected_edges(edge_index)
+    und_pairs, dir_to_undir = undirected_edges(edge_index)
     num_und = und_pairs.shape[0]
 
     # Get undirected attributes (first occurrence)
