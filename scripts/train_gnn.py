@@ -18,30 +18,12 @@ Examples
 
 import argparse
 import logging
-import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
+from cli import setup_logging
 from gnn.train import TrainConfig, train
-
-
-def setup_logging(verbose: bool = False) -> None:
-    """
-    Configure root logging.
-
-    Parameters
-    ----------
-    verbose : bool
-        Enable ``DEBUG`` level if True, otherwise ``INFO``.
-    """
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        stream=sys.stdout,
-    )
 
 
 def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:

@@ -40,6 +40,7 @@ _SRC = Path(__file__).resolve().parent.parent / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from cli import setup_logging  # noqa: E402
 from qec_generator.config import Config, load_config  # noqa: E402
 from qec_generator.sampler import build_circuit  # noqa: E402
 
@@ -464,23 +465,6 @@ def save_report(report: EvalReport, path: Path) -> None:
         encoding="utf-8",
     )
     logger.info("Report saved to %s", path)
-
-
-def setup_logging(verbose: bool = False) -> None:
-    """Configure root logging.
-
-    Parameters
-    ----------
-    verbose : bool
-        Enable ``DEBUG`` level if True, otherwise ``INFO``.
-    """
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        stream=sys.stdout,
-    )
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

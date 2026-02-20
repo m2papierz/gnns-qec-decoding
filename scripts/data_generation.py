@@ -5,25 +5,8 @@ import logging
 import sys
 from pathlib import Path
 
+from cli import setup_logging
 from qec_generator import CASES, Config, generate_datasets, generate_raw_data
-
-
-def setup_logging(verbose: bool = False) -> None:
-    """
-    Configure logging for the application.
-
-    Parameters
-    ----------
-    verbose : bool, default=False
-        Enable DEBUG level logging if True.
-    """
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        stream=sys.stdout,
-    )
 
 
 def main() -> None:
