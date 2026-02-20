@@ -11,7 +11,7 @@ output_dir: "./outputs/runs"
 # Model architecture
 model:
   hidden_dim: 64
-  num_layers: 4
+  num_layers: 8
   dropout: 0.1
 
 # Optimisation
@@ -27,15 +27,25 @@ num_workers: 4
 # Sample cap for fast iteration (null = use all data)
 max_samples: null
 
-# Edge-case specific (mwpm_teacher / hybrid).
-# Set to null to auto-estimate from training data.
+# Edge-case loss: "focal" or "bce"
+edge_loss: "focal"
+focal_gamma: 2.0
+
+# Positive-class weight (null = auto-estimate from data)
 edge_pos_weight: null
+
+# LR schedule
+warmup_epochs: 5
+
+# LER monitoring during training
+ler_every: 5         # compute val LER every N epochs
+ler_max_shots: 500   # max val shots per setting
 
 # Gradient clipping
 max_grad_norm: 1.0
 
-# Early stopping (0 = disabled)
-patience: 0
+# Early stopping: patience counts LER evals, not epochs (0 = disabled)
+patience: 20
 
 # Reproducibility
 seed: 42

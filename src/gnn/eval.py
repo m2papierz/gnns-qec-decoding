@@ -853,6 +853,162 @@ def evaluate_all(
     return report
 
 
+class ValLEREstimator:
+    """
+    Lightweight LER estimator for monitoring during training.
+
+    Pre-loads graph structures, DEM observable mappings, and val data once
+    at init.  Call :meth:`compute` each epoch to get the current aggregate
+    logical error rate without rebuilding anything.
+
+    For ``logical_head``, decoding is a simple threshold — nearly free.
+    For edge cases, runs per-shot PyMatching on a capped subset of val.
+
+    Parameters
+    ----------
+    datasets_dir : Path
+        Root datasets directory.
+    case : str
+        Training case.
+    max_shots_per_setting : int
+        Cap on val shots per setting (keeps cost bounded).
+    batch_size : int
+        Shots per forward pass.
+    """
+
+    def __init__(
+        self,
+        datasets_dir: Path,
+        case: Case,
+        max_shots_per_setting: int = 500,
+        batch_size: int = 256,
+    ) -> None:
+        self.case = case
+        self.batch_size = batch_size
+        self._settings: List[Dict[str, Any]] = []
+
+        case_root = datasets_dir / case
+        settings_json = _read_json(case_root / "settings.json")
+
+        # For edge cases, locate raw_data_dir for DEM files
+        raw_data_dir: Path | None = None
+        if case != "logical_head":
+            bm_path = case_root / "build_meta.json"
+            if bm_path.is_file():
+                candidate = Path(_read_json(bm_path).get("raw_data_dir", ""))
+                if candidate.is_dir():
+                    raw_data_dir = candidate
+            if raw_data_dir is None:
+                logger.warning(
+                    "raw_data_dir not found — edge-case LER monitoring "
+                    "will not work."
+                )
+
+        total_shots = 0
+        for s in settings_json["settings"]:
+            g = s["graph"]
+            shard = case_root / "shards" / s["relpath"]
+            graph_dir = shard / "graph"
+
+            val_syn_path = shard / "val_syndrome.npy"
+            if not val_syn_path.exists():
+                continue
+
+            ei_np = np.load(graph_dir / "edge_index.npy").astype(np.int64)
+            ea_np = np.load(graph_dir / "edge_attr.npy").astype(np.float32)
+
+            syndrome = np.load(val_syn_path)
+            logical = np.load(shard / "val_logical.npy")
+            if logical.ndim == 1:
+                logical = logical[:, np.newaxis]
+
+            n = min(max_shots_per_setting, syndrome.shape[0])
+            total_shots += n
+
+            sd: Dict[str, Any] = {
+                "edge_index": torch.from_numpy(ei_np).long(),
+                "edge_attr": torch.from_numpy(ea_np).float(),
+                "ei_np": ei_np,
+                "syndrome": syndrome[:n].astype(np.uint8),
+                "logical": logical[:n].astype(np.uint8),
+                "num_nodes": int(g["num_nodes"]),
+                "num_detectors": int(g["num_detectors"]),
+                "has_boundary": bool(g.get("has_boundary", False)),
+                "num_observables": int(g.get("num_observables", 1)),
+                "edge_obs_map": None,
+            }
+
+            # Extract observable mapping from DEM for edge cases
+            if case != "logical_head" and raw_data_dir is not None:
+                dem = _load_dem_for_setting(
+                    raw_data_dir,
+                    int(s["distance"]),
+                    int(s["rounds"]),
+                    float(s["error_prob"]),
+                )
+                if dem is not None:
+                    und_pairs, _ = _undirected_edges(ei_np)
+                    sd["edge_obs_map"] = _extract_edge_obs_map(
+                        dem, und_pairs, sd["num_detectors"], sd["has_boundary"]
+                    )
+
+            self._settings.append(sd)
+
+        logger.info(
+            "ValLEREstimator ready: %d settings, %d total shots",
+            len(self._settings),
+            total_shots,
+        )
+
+    @torch.no_grad()
+    def compute(self, model: QECDecoder, device: torch.device) -> float:
+        """
+        Compute aggregate LER.  Puts model in eval mode, restores after.
+        """
+        was_training = model.training
+        model.eval()
+
+        total_shots = 0
+        total_errors = 0
+
+        for s in self._settings:
+            if self.case == "logical_head":
+                n, errs = _eval_logical_head(
+                    model,
+                    s["edge_index"],
+                    s["edge_attr"],
+                    s["syndrome"],
+                    s["logical"],
+                    s["num_nodes"],
+                    s["num_detectors"],
+                    device,
+                    self.batch_size,
+                )
+            else:
+                n, errs, _ = _eval_edge_case(
+                    model,
+                    s["edge_index"],
+                    s["edge_attr"],
+                    s["ei_np"],
+                    s["syndrome"],
+                    s["logical"],
+                    s["num_nodes"],
+                    s["num_detectors"],
+                    s["has_boundary"],
+                    s["num_observables"],
+                    device,
+                    edge_obs_map=s["edge_obs_map"],
+                    batch_size=self.batch_size,
+                )
+            total_shots += n
+            total_errors += errs
+
+        if was_training:
+            model.train()
+
+        return total_errors / max(total_shots, 1)
+
+
 def print_report(report: EvalReport) -> None:
     """
     Log a formatted summary table.
