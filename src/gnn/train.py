@@ -21,20 +21,18 @@ from typing import Any, Dict
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import yaml
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch_geometric.data import Batch
 from torch_geometric.loader import DataLoader
 
 from gnn.dataset import MixedSurfaceCodeDataset
-from gnn.eval import ValLEREstimator
 from gnn.models.heads import Case, QECDecoder, build_model
 
 
 logger = logging.getLogger(__name__)
-
-
-# ── Config ────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -44,8 +42,7 @@ class TrainConfig:
     Attributes
     ----------
     case : str
-        Training case: ``"logical_head"``, ``"mwpm_teacher"``, or
-        ``"hybrid"``.
+        Training case: ``"logical_head"``, ``"mwpm_teacher"``, or ``"hybrid"``.
     datasets_dir : Path
         Root directory of packaged datasets.
     output_dir : Path
@@ -66,25 +63,14 @@ class TrainConfig:
         Graphs per training batch.
     num_workers : int
         DataLoader worker processes.
-    edge_loss : str
-        Loss for edge cases: ``"focal"`` or ``"bce"``.
-    focal_gamma : float
-        Focal loss focusing parameter.
     edge_pos_weight : float or None
-        Positive-class weight (alpha for focal, pos_weight for BCE).
-        If None, estimated from training data.
-    warmup_epochs : int
-        Linear LR warmup duration.
-    ler_every : int
-        Compute validation LER every N epochs.  For ``logical_head``
-        this is cheap; for edge cases it runs PyMatching.
-    ler_max_shots : int
-        Max val shots per setting for LER estimation.
+        Positive-class weight for edge BCE loss.  If None, estimated
+        from training data.
     max_grad_norm : float
         Maximum gradient norm for clipping.
     patience : int
-        Early stopping patience (LER evaluations without improvement).
-        Set to 0 to disable.
+        Early stopping patience (epochs without improvement).
+        Set to 0 to disable early stopping.
     seed : int
         Random seed for reproducibility.
     resume : Path or None
@@ -104,14 +90,9 @@ class TrainConfig:
     epochs: int = 100
     batch_size: int = 64
     num_workers: int = 4
-    edge_loss: str = "focal"
-    focal_gamma: float = 2.0
     edge_pos_weight: float | None = None
-    warmup_epochs: int = 5
-    ler_every: int = 5
-    ler_max_shots: int = 500
     max_grad_norm: float = 1.0
-    patience: int = 10
+    patience: int = 15
     seed: int = 42
     resume: Path | None = None
     max_samples: int | None = None
@@ -123,18 +104,12 @@ class TrainConfig:
 
         flat: Dict[str, Any] = {}
 
-        # Top-level scalars
         for key in (
             "case",
             "datasets_dir",
             "output_dir",
             "num_workers",
-            "edge_loss",
-            "focal_gamma",
             "edge_pos_weight",
-            "warmup_epochs",
-            "ler_every",
-            "ler_max_shots",
             "max_grad_norm",
             "patience",
             "seed",
@@ -143,27 +118,21 @@ class TrainConfig:
             if key in raw:
                 flat[key] = raw[key]
 
-        # Nested: model.*
         model = raw.get("model", {})
         for key in ("hidden_dim", "num_layers", "dropout"):
             if key in model:
                 flat[key] = model[key]
 
-        # Nested: optimisation.*
         optim = raw.get("optimisation", {})
         for key in ("lr", "weight_decay", "epochs", "batch_size"):
             if key in optim:
                 flat[key] = optim[key]
 
-        # Path coercion
         for key in ("datasets_dir", "output_dir"):
             if key in flat:
                 flat[key] = Path(flat[key])
 
         return cls(**flat)
-
-
-# ── Utilities ─────────────────────────────────────────────────────────
 
 
 def seed_everything(seed: int) -> None:
@@ -180,9 +149,9 @@ def _estimate_edge_pos_weight(
     max_batches: int = 50,
 ) -> float:
     """
-    Estimate positive-class weight from training label distribution.
+    Estimate positive-class weight for edge BCE from training data.
 
-    Returns ``num_neg / num_pos``, clamped to ``[1, 200]``.
+    Returns ``num_neg / num_pos``, clamped to ``[1.0, 200.0]``.
     """
     total_pos = 0
     total_neg = 0
@@ -202,7 +171,7 @@ def _estimate_edge_pos_weight(
     raw = total_neg / total_pos
     clamped = float(np.clip(raw, 1.0, 200.0))
     logger.info(
-        "Edge label balance: %d pos / %d neg → raw=%.1f, clamped=%.1f",
+        "Edge label balance: %d pos / %d neg → raw=%.1f, pos_weight=%.1f",
         total_pos,
         total_neg,
         raw,
@@ -211,66 +180,50 @@ def _estimate_edge_pos_weight(
     return clamped
 
 
-# ── Loss ──────────────────────────────────────────────────────────────
+class _GraphNormalizedBCE(nn.Module):
+    """Per-graph normalized BCE with logits for edge predictions.
 
-
-class FocalLoss(nn.Module):
-    """
-    Focal loss for binary classification with extreme class imbalance.W
-
-    Standard choice for foreground/background ratios ~1:100+.
-    Down-weights easy negatives so gradient signal is dominated by
-    hard positives.
-
-    Parameters
-    ----------
-    alpha : float
-        Weight for the positive class.
-    gamma : float
-        Focusing parameter.  ``gamma=0`` recovers weighted BCE.
+    Computes per-edge BCE, averages within each graph, then averages
+    across graphs.  Prevents larger graphs from dominating the
+    gradient in mixed-distance batches.
     """
 
-    def __init__(self, alpha: float = 1.0, gamma: float = 2.0) -> None:
+    def __init__(self, pos_weight: torch.Tensor | None = None) -> None:
         super().__init__()
-        self.alpha = alpha
-        self.gamma = gamma
+        if pos_weight is not None:
+            self.register_buffer("pos_weight", pos_weight)
+        else:
+            self.pos_weight = None
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        p = torch.sigmoid(logits)
-        ce = nn.functional.binary_cross_entropy_with_logits(
-            logits, targets, reduction="none"
+    def forward(
+        self,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        batch: Batch,
+    ) -> torch.Tensor:
+        raw = F.binary_cross_entropy_with_logits(
+            logits, target, pos_weight=self.pos_weight, reduction="none"
         )
-        p_t = targets * p + (1 - targets) * (1 - p)
-        alpha_t = targets * self.alpha + (1 - targets) * 1.0
-        focal_weight = alpha_t * (1 - p_t) ** self.gamma
-        return (focal_weight * ce).mean()
+        edge_graph = batch.batch[batch.edge_index[0]]
+        n_graphs = int(batch.batch.max()) + 1
+        graph_loss = torch.zeros(n_graphs, device=logits.device)
+        graph_count = torch.zeros(n_graphs, device=logits.device)
+        graph_loss.scatter_add_(0, edge_graph, raw)
+        graph_count.scatter_add_(0, edge_graph, torch.ones_like(raw))
+        return (graph_loss / graph_count.clamp(min=1)).mean()
 
 
 def build_criterion(
     case: Case,
-    edge_loss: str = "focal",
-    focal_gamma: float = 2.0,
     pos_weight: float | None = None,
     device: torch.device | None = None,
 ) -> nn.Module:
-    """Build loss function for a given training case."""
+    """Build the loss function for a given training case."""
     if case == "logical_head":
         return nn.BCEWithLogitsLoss()
 
-    alpha = pos_weight if pos_weight is not None else 1.0
-
-    if edge_loss == "focal":
-        logger.info("Using FocalLoss(alpha=%.1f, gamma=%.1f)", alpha, focal_gamma)
-        return FocalLoss(alpha=alpha, gamma=focal_gamma)
-
-    # BCE fallback
-    if pos_weight is not None:
-        pw = torch.tensor([pos_weight], device=device)
-        return nn.BCEWithLogitsLoss(pos_weight=pw)
-    return nn.BCEWithLogitsLoss()
-
-
-# ── Dataset validation ────────────────────────────────────────────────
+    pw = torch.tensor([pos_weight], device=device) if pos_weight is not None else None
+    return _GraphNormalizedBCE(pos_weight=pw)
 
 
 def _validate_dataset(ds: MixedSurfaceCodeDataset, label: str) -> None:
@@ -280,14 +233,46 @@ def _validate_dataset(ds: MixedSurfaceCodeDataset, label: str) -> None:
         raise ValueError(
             f"{label} dataset: expected x shape (N, 1), got {tuple(sample.x.shape)}"
         )
-    if sample.edge_attr.ndim != 2 or sample.edge_attr.shape[1] != 2:
+    if sample.edge_index.shape[0] != 2:
         raise ValueError(
-            f"{label} dataset: expected edge_attr shape (E, 2), "
+            f"{label} dataset: expected edge_index shape (2, E), "
+            f"got {tuple(sample.edge_index.shape)}"
+        )
+    if sample.edge_attr.ndim != 2:
+        raise ValueError(
+            f"{label} dataset: expected edge_attr shape (E, D), "
             f"got {tuple(sample.edge_attr.shape)}"
         )
+    if sample.y.ndim < 1:
+        raise ValueError(f"{label} dataset: y is scalar, expected ≥1D")
+    logger.debug(
+        "%s dataset validated: x=%s, edges=%d, y=%s",
+        label,
+        tuple(sample.x.shape),
+        sample.edge_index.shape[1],
+        tuple(sample.y.shape),
+    )
 
 
-# ── Training / validation steps ──────────────────────────────────────
+def _build_scheduler(
+    optimizer: torch.optim.Optimizer,
+    epochs: int,
+    eta_min: float,
+) -> tuple[object, str]:
+    """Build linear warmup + cosine annealing scheduler."""
+    warmup_epochs = max(1, epochs // 20)
+    warmup = LinearLR(optimizer, start_factor=0.01, total_iters=warmup_epochs)
+    cosine = CosineAnnealingLR(
+        optimizer, T_max=epochs - warmup_epochs, eta_min=eta_min
+    )
+    scheduler = SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs]
+    )
+    desc = (
+        f"LinearWarmup({warmup_epochs}ep) → "
+        f"CosineAnnealing(T_max={epochs - warmup_epochs}, eta_min={eta_min:.1e})"
+    )
+    return scheduler, desc
 
 
 def train_one_epoch(
@@ -298,30 +283,55 @@ def train_one_epoch(
     device: torch.device,
     case: Case,
     max_grad_norm: float = 1.0,
-) -> float:
-    """Run one training epoch.  Returns mean loss."""
+    scaler: torch.amp.GradScaler | None = None,
+) -> Dict[str, float]:
+    """Run one training epoch with optional mixed-precision."""
     model.train()
+
+    if scaler is None:
+        scaler = torch.amp.GradScaler(enabled=False)
+    use_amp = scaler.is_enabled()
+
     total_loss = 0.0
     num_batches = 0
+    total_graphs = 0
+    total_errors = 0
 
     for batch in loader:
         batch = batch.to(device)
         optimizer.zero_grad()
 
-        logits = model(batch)
-        if case == "logical_head":
-            loss = criterion(logits.view(-1), batch.y)
-        else:
-            loss = criterion(logits, batch.y)
+        with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+            logits = model(batch)
 
-        loss.backward()
+            if case == "logical_head":
+                target = batch.y
+                loss = criterion(logits.view(-1), target)
+            else:
+                loss = criterion(logits, batch.y, batch)
+
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
+
+        if case == "logical_head":
+            with torch.no_grad():
+                pred = (logits > 0.0).float()
+                target_2d = batch.y.view_as(pred)
+                total_graphs += pred.shape[0]
+                total_errors += int((pred != target_2d).any(dim=1).sum().item())
 
         total_loss += loss.item()
         num_batches += 1
 
-    return total_loss / max(num_batches, 1)
+    metrics: Dict[str, float] = {"loss": total_loss / max(num_batches, 1)}
+
+    if case == "logical_head" and total_graphs > 0:
+        metrics["ler"] = total_errors / total_graphs
+
+    return metrics
 
 
 @torch.no_grad()
@@ -331,28 +341,51 @@ def validate(
     criterion: nn.Module,
     device: torch.device,
     case: Case,
-) -> float:
-    """Run validation.  Returns mean loss."""
+) -> Dict[str, float]:
+    """Run validation and compute metrics."""
     model.eval()
+    use_amp = device.type == "cuda"
+
     total_loss = 0.0
     num_batches = 0
+    total_graphs = 0
+    total_errors = 0
+    edge_correct = 0
+    edge_total = 0
 
     for batch in loader:
         batch = batch.to(device)
-        logits = model(batch)
+
+        with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+            logits = model(batch)
+
+            if case == "logical_head":
+                target = batch.y
+                loss = criterion(logits.view(-1), target)
+            else:
+                loss = criterion(logits, batch.y, batch)
 
         if case == "logical_head":
-            loss = criterion(logits.view(-1), batch.y)
+            pred = (logits > 0.0).float()
+            target_2d = batch.y.view_as(pred)
+            total_graphs += pred.shape[0]
+            total_errors += int((pred != target_2d).any(dim=1).sum().item())
         else:
-            loss = criterion(logits, batch.y)
+            pred = (logits > 0.0).float()
+            edge_correct += int((pred == batch.y).sum().item())
+            edge_total += int(batch.y.numel())
 
         total_loss += loss.item()
         num_batches += 1
 
-    return total_loss / max(num_batches, 1)
+    metrics: Dict[str, float] = {"loss": total_loss / max(num_batches, 1)}
 
+    if case == "logical_head" and total_graphs > 0:
+        metrics["ler"] = total_errors / total_graphs
+    if case != "logical_head" and edge_total > 0:
+        metrics["edge_acc"] = edge_correct / edge_total
 
-# ── Checkpoint management ────────────────────────────────────────────
+    return metrics
 
 
 def save_checkpoint(
@@ -361,30 +394,23 @@ def save_checkpoint(
     optimizer: torch.optim.Optimizer,
     scheduler: object,
     epoch: int,
-    best_ler: float,
+    best_metric: float,
     config: TrainConfig,
 ) -> None:
-    """Save training state to disk."""
+    """Save a training checkpoint."""
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    config_dict = asdict(config)
-    config_dict["datasets_dir"] = str(config.datasets_dir)
-    config_dict["output_dir"] = str(config.output_dir)
-    config_dict["resume"] = str(config.resume) if config.resume else None
-
     torch.save(
         {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
-            "scheduler_state_dict": (
-                scheduler.state_dict() if hasattr(scheduler, "state_dict") else None
-            ),
-            "best_metric": best_ler,
-            "config": config_dict,
+            "scheduler_state_dict": scheduler.state_dict(),  # type: ignore[attr-defined]
+            "best_metric": best_metric,
+            "config": asdict(config),
         },
         path,
     )
+    logger.debug("Saved checkpoint to %s", path)
 
 
 def load_checkpoint(
@@ -393,19 +419,16 @@ def load_checkpoint(
     optimizer: torch.optim.Optimizer | None = None,
     scheduler: object | None = None,
 ) -> Dict[str, Any]:
-    """Load training state from disk."""
-    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    """Load a training checkpoint."""
+    ckpt = torch.load(path, weights_only=False)
     model.load_state_dict(ckpt["model_state_dict"])
 
     if optimizer is not None and "optimizer_state_dict" in ckpt:
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-    if (
-        scheduler is not None
-        and hasattr(scheduler, "load_state_dict")
-        and ckpt.get("scheduler_state_dict") is not None
-    ):
-        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+    if scheduler is not None and "scheduler_state_dict" in ckpt:
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])  # type: ignore[attr-defined]
 
+    logger.info("Loaded checkpoint from %s (epoch %d)", path, ckpt.get("epoch", -1))
     return {
         "epoch": ckpt.get("epoch", 0),
         "best_metric": ckpt.get("best_metric", float("inf")),
@@ -414,7 +437,7 @@ def load_checkpoint(
 
 
 def _validate_resume_config(cfg: TrainConfig, ckpt_cfg: Dict[str, Any]) -> None:
-    """Raise ValueError if checkpoint architecture doesn't match."""
+    """Raise ValueError if checkpoint architecture doesn't match current config."""
     for key in ("case", "hidden_dim", "num_layers"):
         current = getattr(cfg, key)
         saved = ckpt_cfg.get(key)
@@ -425,14 +448,32 @@ def _validate_resume_config(cfg: TrainConfig, ckpt_cfg: Dict[str, Any]) -> None:
             )
 
 
-# ── Main training function ───────────────────────────────────────────
+def _best_metric_key(case: Case) -> str:
+    return "ler" if case == "logical_head" else "loss"
+
+
+def _format_metrics(metrics: Dict[str, float]) -> str:
+    parts = []
+    for k, v in metrics.items():
+        if k == "loss":
+            parts.append(f"loss={v:.4f}")
+        elif k == "ler":
+            parts.append(f"LER={v:.4f}")
+        elif k == "edge_acc":
+            parts.append(f"edge_acc={v:.4f}")
+        else:
+            parts.append(f"{k}={v:.4f}")
+    return "  ".join(parts)
 
 
 def train(cfg: TrainConfig) -> Path:
     """
     Execute the full training pipeline.
 
-    Returns the path to the best model checkpoint (selected on val LER).
+    Returns
+    -------
+    Path
+        Path to the best model checkpoint.
     """
     seed_everything(cfg.seed)
 
@@ -484,15 +525,6 @@ def train(cfg: TrainConfig) -> Path:
 
     logger.info("Train: %d samples, Val: %d samples", len(train_ds), len(val_ds))
 
-    # ── LER monitor ──────────────────────────────────────────────
-
-    ler_monitor = ValLEREstimator(
-        datasets_dir=cfg.datasets_dir,
-        case=cfg.case,
-        max_shots_per_setting=cfg.ler_max_shots,
-        batch_size=cfg.batch_size * 4,  # inference can use larger batches
-    )
-
     # ── Model ─────────────────────────────────────────────────────
 
     model = build_model(
@@ -506,41 +538,16 @@ def train(cfg: TrainConfig) -> Path:
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info("Model: %d trainable parameters", num_params)
 
-    # ── Optimizer + scheduler (warmup → cosine) ──────────────────
+    # ── Optimizer + scheduler ─────────────────────────────────────
 
     optimizer = AdamW(
         model.parameters(),
         lr=cfg.lr,
         weight_decay=cfg.weight_decay,
     )
-
-    warmup = cfg.warmup_epochs
-    cosine_epochs = max(cfg.epochs - warmup, 1)
     eta_min = cfg.lr / 50
-
-    warmup_sched = LinearLR(
-        optimizer,
-        start_factor=1e-2,
-        end_factor=1.0,
-        total_iters=warmup,
-    )
-    cosine_sched = CosineAnnealingLR(
-        optimizer,
-        T_max=cosine_epochs,
-        eta_min=eta_min,
-    )
-    scheduler = SequentialLR(
-        optimizer,
-        schedulers=[warmup_sched, cosine_sched],
-        milestones=[warmup],
-    )
-
-    logger.info(
-        "Schedule: %d warmup → cosine(%d, eta_min=%.1e)",
-        warmup,
-        cosine_epochs,
-        eta_min,
-    )
+    scheduler, sched_desc = _build_scheduler(optimizer, cfg.epochs, eta_min)
+    logger.info("Scheduler: %s", sched_desc)
 
     # ── Loss ──────────────────────────────────────────────────────
 
@@ -550,113 +557,105 @@ def train(cfg: TrainConfig) -> Path:
 
     criterion = build_criterion(
         cfg.case,
-        edge_loss=cfg.edge_loss,
-        focal_gamma=cfg.focal_gamma,
         pos_weight=pos_weight,
         device=device,
     )
 
+    # ── AMP scaler ────────────────────────────────────────────────
+
+    scaler = torch.amp.GradScaler(enabled=(device.type == "cuda"))
+    if scaler.is_enabled():
+        logger.info("Mixed precision training enabled (AMP)")
+
     # ── Resume ────────────────────────────────────────────────────
 
     start_epoch = 0
-    best_ler = float("inf")
+    best_metric = float("inf")
 
     if cfg.resume is not None:
         ckpt_info = load_checkpoint(cfg.resume, model, optimizer, scheduler)
         _validate_resume_config(cfg, ckpt_info["config"])
         start_epoch = ckpt_info["epoch"] + 1
-        best_ler = ckpt_info["best_metric"]
-        logger.info("Resuming from epoch %d (best LER=%.6f)", start_epoch, best_ler)
+        best_metric = ckpt_info["best_metric"]
+        logger.info(
+            "Resuming from epoch %d (best_metric=%.6f)",
+            start_epoch,
+            best_metric,
+        )
 
     # ── Save config ───────────────────────────────────────────────
 
+    config_path = run_dir / "config.json"
     config_dict = asdict(cfg)
     config_dict["datasets_dir"] = str(cfg.datasets_dir)
     config_dict["output_dir"] = str(cfg.output_dir)
     config_dict["resume"] = str(cfg.resume) if cfg.resume else None
-    (run_dir / "config.json").write_text(
-        json.dumps(config_dict, indent=2), encoding="utf-8"
+    config_path.write_text(
+        json.dumps(config_dict, indent=2),
+        encoding="utf-8",
     )
 
     # ── Training loop ─────────────────────────────────────────────
 
+    metric_key = _best_metric_key(cfg.case)
     best_path = run_dir / "best.pt"
     history: list[Dict[str, Any]] = []
-    evals_without_improvement = 0
-    last_ler: float | None = None
+    epochs_without_improvement = 0
 
-    logger.info("Training %d epochs (LER eval every %d)", cfg.epochs, cfg.ler_every)
+    logger.info("Starting training: %d epochs", cfg.epochs)
 
     for epoch in range(start_epoch, cfg.epochs):
         t0 = time.perf_counter()
 
-        train_loss = train_one_epoch(
-            model,
-            train_loader,
-            criterion,
-            optimizer,
-            device,
-            cfg.case,
-            cfg.max_grad_norm,
+        train_metrics = train_one_epoch(
+            model=model,
+            loader=train_loader,
+            criterion=criterion,
+            optimizer=optimizer,
+            device=device,
+            case=cfg.case,
+            max_grad_norm=cfg.max_grad_norm,
+            scaler=scaler,
         )
-        val_loss = validate(
-            model,
-            val_loader,
-            criterion,
-            device,
-            cfg.case,
+
+        val_metrics = validate(
+            model=model,
+            loader=val_loader,
+            criterion=criterion,
+            device=device,
+            case=cfg.case,
         )
 
         scheduler.step()
         elapsed = time.perf_counter() - t0
         lr = optimizer.param_groups[0]["lr"]
 
-        # ── Periodic LER evaluation ──────────────────────────────
+        current = val_metrics[metric_key]
+        improved = current < best_metric
+        if improved:
+            best_metric = current
+            epochs_without_improvement = 0
+            save_checkpoint(
+                path=best_path,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                epoch=epoch,
+                best_metric=best_metric,
+                config=cfg,
+            )
+        else:
+            epochs_without_improvement += 1
 
-        do_ler = (
-            epoch == start_epoch
-            or (epoch + 1) % cfg.ler_every == 0
-            or epoch == cfg.epochs - 1
-        )
-
-        improved = False
-        if do_ler:
-            t_ler = time.perf_counter()
-            current_ler = ler_monitor.compute(model, device)
-            ler_time = time.perf_counter() - t_ler
-            elapsed += ler_time
-            last_ler = current_ler
-
-            if current_ler < best_ler:
-                best_ler = current_ler
-                improved = True
-                evals_without_improvement = 0
-                save_checkpoint(
-                    best_path,
-                    model,
-                    optimizer,
-                    scheduler,
-                    epoch,
-                    best_ler,
-                    cfg,
-                )
-            else:
-                evals_without_improvement += 1
-
-        # ── Log ──────────────────────────────────────────────────
-
-        ler_str = f"  LER={last_ler:.6f}" if last_ler is not None else ""
         marker = " *" if improved else ""
-
         logger.info(
-            "Epoch %3d/%d [%.1fs, lr=%.1e]  " "train_loss=%.4f  val_loss=%.4f%s%s",
+            "Epoch %3d/%d [%.1fs, lr=%.1e]  " "train: %s  val: %s%s",
             epoch + 1,
             cfg.epochs,
             elapsed,
             lr,
-            train_loss,
-            val_loss,
-            ler_str,
+            _format_metrics(train_metrics),
+            _format_metrics(val_metrics),
             marker,
         )
 
@@ -665,18 +664,15 @@ def train(cfg: TrainConfig) -> Path:
                 "epoch": epoch,
                 "lr": lr,
                 "elapsed_s": round(elapsed, 2),
-                "train_loss": train_loss,
-                "val_loss": val_loss,
-                "val_ler": last_ler,
+                "train": train_metrics,
+                "val": val_metrics,
                 "best": improved,
             }
         )
 
-        # ── Early stopping (counts LER evals, not epochs) ────────
-
-        if cfg.patience > 0 and do_ler and evals_without_improvement >= cfg.patience:
+        if cfg.patience > 0 and epochs_without_improvement >= cfg.patience:
             logger.info(
-                "Early stopping at epoch %d " "(%d LER evals without improvement)",
+                "Early stopping at epoch %d (%d epochs without improvement)",
                 epoch + 1,
                 cfg.patience,
             )
@@ -684,10 +680,9 @@ def train(cfg: TrainConfig) -> Path:
 
     # ── Save history ──────────────────────────────────────────────
 
-    (run_dir / "history.json").write_text(
-        json.dumps(history, indent=2), encoding="utf-8"
-    )
-    logger.info("Training complete. Best LER=%.6f", best_ler)
+    history_path = run_dir / "history.json"
+    history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
+    logger.info("Training complete. Best %s=%.6f", metric_key, best_metric)
     logger.info("Best checkpoint: %s", best_path)
 
     return best_path
