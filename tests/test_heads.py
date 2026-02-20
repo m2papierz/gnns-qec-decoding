@@ -18,7 +18,7 @@ def _make_graph(num_nodes: int = 6, num_edges: int = 10) -> Data:
         x=torch.randint(0, 2, (num_nodes, 1)).float(),
         edge_index=torch.randint(0, num_nodes, (2, num_edges)),
         edge_attr=torch.rand(num_edges, 2),
-        y=torch.zeros(1),  # placeholder
+        y=torch.zeros(1),
         logical=torch.zeros(1),
         setting_id=torch.tensor(0),
     )
@@ -59,8 +59,7 @@ class TestLogicalHead:
         head = LogicalHead(hidden_dim=16, dropout=0.0)
         h = torch.randn(5, 16)
         batch = torch.zeros(5, dtype=torch.long)
-        # Should not raise on unexpected kwargs
-        logits = head(h, batch, edge_index=None, edge_attr=None)
+        logits = head(h, batch, edge_index=None, edge_attr=None, edge_h=None)
         assert logits.shape == (1, 1)
 
     def test_gradient_flow(self) -> None:
@@ -73,40 +72,33 @@ class TestLogicalHead:
 
 
 class TestEdgeHead:
-    """Tests for per-edge prediction."""
+    """Tests for per-edge prediction with learned edge embeddings."""
 
     def test_output_shape(self) -> None:
-        head = EdgeHead(hidden_dim=32, edge_dim=2, dropout=0.0)
+        head = EdgeHead(hidden_dim=32, dropout=0.0)
         h = torch.randn(10, 32)
         ei = torch.randint(0, 10, (2, 20))
-        ea = torch.randn(20, 2)
-        logits = head(h, edge_index=ei, edge_attr=ea)
+        edge_h = torch.randn(20, 32)
+        logits = head(h, edge_index=ei, edge_h=edge_h)
         assert logits.shape == (20,)
-
-    def test_custom_edge_dim(self) -> None:
-        head = EdgeHead(hidden_dim=16, edge_dim=5, dropout=0.0)
-        h = torch.randn(6, 16)
-        ei = torch.randint(0, 6, (2, 12))
-        ea = torch.randn(12, 5)
-        logits = head(h, edge_index=ei, edge_attr=ea)
-        assert logits.shape == (12,)
 
     def test_ignores_extra_kwargs(self) -> None:
         head = EdgeHead(hidden_dim=16, dropout=0.0)
         h = torch.randn(4, 16)
         ei = torch.randint(0, 4, (2, 6))
-        ea = torch.randn(6, 2)
-        logits = head(h, edge_index=ei, edge_attr=ea, batch=None)
+        edge_h = torch.randn(6, 16)
+        logits = head(h, edge_index=ei, edge_h=edge_h, batch=None, edge_attr=None)
         assert logits.shape == (6,)
 
     def test_gradient_flow(self) -> None:
         head = EdgeHead(hidden_dim=16, dropout=0.0)
         h = torch.randn(6, 16, requires_grad=True)
         ei = torch.randint(0, 6, (2, 10))
-        ea = torch.randn(10, 2)
-        logits = head(h, edge_index=ei, edge_attr=ea)
+        edge_h = torch.randn(10, 16, requires_grad=True)
+        logits = head(h, edge_index=ei, edge_h=edge_h)
         logits.sum().backward()
         assert h.grad is not None
+        assert edge_h.grad is not None
 
 
 class TestQECDecoder:
@@ -136,7 +128,6 @@ class TestQECDecoder:
         model.eval()
         with torch.no_grad():
             logits = model(batched)
-        # 3 graphs, 1 observable each
         assert logits.shape == (3, 1)
 
     def test_edge_head_output_shape(self, batched: Batch) -> None:
@@ -149,7 +140,6 @@ class TestQECDecoder:
         model.eval()
         with torch.no_grad():
             logits = model(batched)
-        # Total edges across all 3 graphs
         total_edges = batched.edge_attr.shape[0]
         assert logits.shape == (total_edges,)
 
@@ -157,7 +147,6 @@ class TestQECDecoder:
         """hybrid and mwpm_teacher produce same architecture."""
         m1 = build_model("mwpm_teacher", hidden_dim=16, num_layers=2)
         m2 = build_model("hybrid", hidden_dim=16, num_layers=2)
-        # Same parameter structure
         p1 = {n for n, _ in m1.named_parameters()}
         p2 = {n for n, _ in m2.named_parameters()}
         assert p1 == p2

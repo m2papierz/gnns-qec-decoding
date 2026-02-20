@@ -1,11 +1,11 @@
 """
 Message-passing encoder for detector-graph decoding.
 
-This module provides the shared GNN backbone used by all three decoding
-heads (``logical_head``, ``mwpm_teacher``, ``hybrid``). The encoder
-transforms raw node features (syndrome bits) and edge attributes (error
-probability, MWPM weight) into learned node embeddings via several rounds
-of neighbourhood message passing.
+Provides the shared GNN backbone used by all three decoding heads.
+Transforms raw node features (syndrome bits) and edge attributes
+(error probability, MWPM weight) into learned node *and edge*
+embeddings via neighbourhood message passing with explicit edge
+co-evolution.
 """
 
 from __future__ import annotations
@@ -17,20 +17,17 @@ from torch_geometric.nn import GINEConv, LayerNorm
 
 class _GINEBlock(nn.Module):
     """
-    Single GINEConv layer with per-layer edge projection, residual
-    connection, norm, and dropout.
-
-    Each block projects raw edge features independently, allowing the
-    network to learn layer-specific edge representations.
+    Single message-passing layer: node update via GINEConv followed by
+    explicit edge update, with residual connections, norms, and dropout.
 
     Parameters
     ----------
     hidden_dim : int
-        Dimensionality of node embeddings.
+        Dimensionality of node and edge embeddings.
     edge_dim : int
         Dimensionality of *raw* edge features (before projection).
     dropout : float
-        Dropout probability applied after norm.
+        Dropout probability applied after norms.
     """
 
     def __init__(
@@ -51,14 +48,22 @@ class _GINEBlock(nn.Module):
         self.norm = LayerNorm(hidden_dim)
         self.dropout = nn.Dropout(dropout)
 
+        self.edge_update = nn.Sequential(
+            nn.Linear(3 * hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        self.edge_norm = LayerNorm(hidden_dim)
+
     def forward(
         self,
         x: torch.Tensor,
         edge_index: torch.Tensor,
         edge_attr: torch.Tensor,
-    ) -> torch.Tensor:
+        edge_h: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Run one message-passing step with residual.
+        One round of node + edge message passing.
 
         Parameters
         ----------
@@ -67,68 +72,52 @@ class _GINEBlock(nn.Module):
         edge_index : Tensor, shape (2, E)
             Edge indices in COO format.
         edge_attr : Tensor, shape (E, edge_dim)
-            *Raw* edge features (projected internally per layer).
+            Raw edge features (projected internally per layer).
+        edge_h : Tensor or None, shape (E, hidden_dim)
+            Learned edge embeddings from previous layer.
 
         Returns
         -------
-        Tensor, shape (N, hidden_dim)
-            Updated node embeddings.
+        x : Tensor, shape (N, hidden_dim)
+        edge_h : Tensor, shape (E, hidden_dim)
         """
         e = self.edge_proj(edge_attr)
+        if edge_h is not None:
+            e = e + edge_h
+
         residual = x
         x = self.conv(x, edge_index, e)
         x = self.norm(x)
         x = self.dropout(x)
         x = x + residual
-        return x
+
+        h_src = x[edge_index[0]]
+        h_dst = x[edge_index[1]]
+        e_new = self.edge_update(
+            torch.cat([h_src + h_dst, (h_src - h_dst).abs(), e], dim=-1)
+        )
+        e_new = self.edge_norm(e_new)
+        e_new = self.dropout(e_new) + e
+
+        return x, e_new
 
 
 class DetectorGraphEncoder(nn.Module):
     """
-    GNN encoder that produces node embeddings from detector graphs.
-
-    Takes raw node features (syndrome bits, boundary flags) and edge
-    attributes (error probability, MWPM weight) and outputs a learned
-    embedding per node. Downstream heads consume these embeddings for
-    graph-level classification, edge-level prediction, or weight
-    rewriting.
-
-    Each message-passing layer independently projects raw edge features,
-    allowing layer-specific edge representations.
+    GNN encoder producing node and edge embeddings from detector graphs.
 
     Parameters
     ----------
-    node_dim : int, optional
-        Input node feature dimensionality.  Default is 1 (syndrome bit
-        only).
-    edge_dim : int, optional
-        Input edge feature dimensionality.  Default is 2
-        (``[error_prob, weight]``).
-    hidden_dim : int, optional
-        Hidden embedding dimensionality for all layers.  Default is 128.
-    num_layers : int, optional
-        Number of message-passing layers.  Default is 6.
-    dropout : float, optional
-        Dropout probability.  Default is 0.1.
-
-    Attributes
-    ----------
-    node_proj : nn.Linear
-        Projects raw node features to ``hidden_dim``.
-    layers : nn.ModuleList
-        Sequence of :class:`_GINEBlock` message-passing layers, each
-        with its own edge projection.
-
-    Examples
-    --------
-    >>> encoder = DetectorGraphEncoder(node_dim=1, edge_dim=2, hidden_dim=64)
-    >>> # Single graph: 10 nodes, 30 edges
-    >>> x = torch.randn(10, 1)
-    >>> edge_index = torch.randint(0, 10, (2, 30))
-    >>> edge_attr = torch.randn(30, 2)
-    >>> h = encoder(x, edge_index, edge_attr)
-    >>> h.shape
-    torch.Size([10, 64])
+    node_dim : int
+        Input node feature dimensionality (default: 1).
+    edge_dim : int
+        Input edge feature dimensionality (default: 2).
+    hidden_dim : int
+        Hidden embedding dimensionality (default: 128).
+    num_layers : int
+        Number of message-passing layers (default: 6).
+    dropout : float
+        Dropout probability (default: 0.1).
     """
 
     def __init__(
@@ -151,10 +140,7 @@ class DetectorGraphEncoder(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
 
-        # Input projection for node features
         self.node_proj = nn.Linear(node_dim, hidden_dim)
-
-        # Message-passing layers (each with own edge projection)
         self.layers = nn.ModuleList(
             [
                 _GINEBlock(hidden_dim, edge_dim=edge_dim, dropout=dropout)
@@ -167,32 +153,30 @@ class DetectorGraphEncoder(nn.Module):
         x: torch.Tensor,
         edge_index: torch.Tensor,
         edge_attr: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Encode detector graph nodes into learned embeddings.
+        Encode detector graph into learned node and edge embeddings.
 
         Parameters
         ----------
         x : Tensor, shape (N, node_dim)
-            Raw node features.  For detector graphs this is typically
-            a single syndrome bit per node (0 or 1), with boundary nodes
-            set to 0.
+            Raw node features (syndrome bits).
         edge_index : Tensor, shape (2, E)
-            Directed edge indices in COO format.  The detector graph
-            stores both directions (u→v and v→u).
+            Directed edge indices in COO format (bidirectional).
         edge_attr : Tensor, shape (E, edge_dim)
-            Raw edge attributes, typically ``[error_prob, weight]``.
+            Raw edge attributes ``[error_prob, weight]``.
 
         Returns
         -------
-        Tensor, shape (N, hidden_dim)
-            Node embeddings after ``num_layers`` rounds of message
-            passing.  These can be consumed by downstream heads for
-            graph-level pooling, edge-level prediction, etc.
+        h : Tensor, shape (N, hidden_dim)
+            Node embeddings.
+        edge_h : Tensor, shape (E, hidden_dim)
+            Edge embeddings.
         """
         h = self.node_proj(x)
+        edge_h = None
 
         for layer in self.layers:
-            h = layer(h, edge_index, edge_attr)
+            h, edge_h = layer(h, edge_index, edge_attr, edge_h)
 
-        return h
+        return h, edge_h

@@ -39,15 +39,20 @@ class TestOutputShapes:
         encoder: DetectorGraphEncoder,
         small_graph: Data,
     ) -> None:
-        h = encoder(small_graph.x, small_graph.edge_index, small_graph.edge_attr)
+        h, edge_h = encoder(
+            small_graph.x, small_graph.edge_index, small_graph.edge_attr
+        )
         assert h.shape == (6, 32)
+        assert edge_h.shape == (8, 32)
 
     def test_hidden_dim_propagates(self) -> None:
         enc = DetectorGraphEncoder(hidden_dim=64, num_layers=2)
         x = torch.randn(10, 1)
         ei = torch.randint(0, 10, (2, 20))
         ea = torch.randn(20, 2)
-        assert enc(x, ei, ea).shape == (10, 64)
+        h, edge_h = enc(x, ei, ea)
+        assert h.shape == (10, 64)
+        assert edge_h.shape == (20, 64)
 
     def test_batched_graphs(
         self,
@@ -55,9 +60,9 @@ class TestOutputShapes:
         small_graph: Data,
     ) -> None:
         batch = Batch.from_data_list([small_graph, small_graph, small_graph])
-        h = encoder(batch.x, batch.edge_index, batch.edge_attr)
-        # 3 graphs × 6 nodes = 18 nodes total
+        h, edge_h = encoder(batch.x, batch.edge_index, batch.edge_attr)
         assert h.shape == (18, 32)
+        assert edge_h.shape == (24, 32)
 
 
 class TestGradients:
@@ -68,8 +73,10 @@ class TestGradients:
         encoder: DetectorGraphEncoder,
         small_graph: Data,
     ) -> None:
-        h = encoder(small_graph.x, small_graph.edge_index, small_graph.edge_attr)
-        loss = h.sum()
+        h, edge_h = encoder(
+            small_graph.x, small_graph.edge_index, small_graph.edge_attr
+        )
+        loss = h.sum() + edge_h.sum()
         loss.backward()
 
         for name, param in encoder.named_parameters():
@@ -81,8 +88,8 @@ class TestGradients:
         small_graph: Data,
     ) -> None:
         x = small_graph.x.clone().requires_grad_(True)
-        h = encoder(x, small_graph.edge_index, small_graph.edge_attr)
-        h.sum().backward()
+        h, edge_h = encoder(x, small_graph.edge_index, small_graph.edge_attr)
+        (h.sum() + edge_h.sum()).backward()
         assert x.grad is not None
         assert x.grad.abs().sum() > 0
 
@@ -95,8 +102,9 @@ class TestConfiguration:
         x = torch.randn(4, 1)
         ei = torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long)
         ea = torch.randn(3, 2)
-        h = enc(x, ei, ea)
+        h, edge_h = enc(x, ei, ea)
         assert h.shape == (4, 16)
+        assert edge_h.shape == (3, 16)
 
     def test_custom_input_dims(self) -> None:
         enc = DetectorGraphEncoder(
@@ -108,8 +116,9 @@ class TestConfiguration:
         x = torch.randn(8, 3)
         ei = torch.randint(0, 8, (2, 12))
         ea = torch.randn(12, 5)
-        h = enc(x, ei, ea)
+        h, edge_h = enc(x, ei, ea)
         assert h.shape == (8, 16)
+        assert edge_h.shape == (12, 16)
 
     def test_invalid_num_layers(self) -> None:
         with pytest.raises(ValueError, match="num_layers"):
@@ -130,6 +139,11 @@ class TestDeterminism:
     ) -> None:
         encoder.eval()
         with torch.no_grad():
-            h1 = encoder(small_graph.x, small_graph.edge_index, small_graph.edge_attr)
-            h2 = encoder(small_graph.x, small_graph.edge_index, small_graph.edge_attr)
+            h1, e1 = encoder(
+                small_graph.x, small_graph.edge_index, small_graph.edge_attr
+            )
+            h2, e2 = encoder(
+                small_graph.x, small_graph.edge_index, small_graph.edge_attr
+            )
         assert torch.allclose(h1, h2)
+        assert torch.allclose(e1, e2)
