@@ -262,9 +262,7 @@ def _build_scheduler(
     """Build linear warmup + cosine annealing scheduler."""
     warmup_epochs = max(1, epochs // 20)
     warmup = LinearLR(optimizer, start_factor=0.01, total_iters=warmup_epochs)
-    cosine = CosineAnnealingLR(
-        optimizer, T_max=epochs - warmup_epochs, eta_min=eta_min
-    )
+    cosine = CosineAnnealingLR(optimizer, T_max=epochs - warmup_epochs, eta_min=eta_min)
     scheduler = SequentialLR(
         optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs]
     )
