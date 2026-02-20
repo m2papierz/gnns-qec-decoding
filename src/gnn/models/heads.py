@@ -21,13 +21,12 @@ protocol, which is handled by the training loop, not here.
 
 from __future__ import annotations
 
-from typing import Literal
-
 import torch
 import torch.nn as nn
 from torch_geometric.data import Batch
 from torch_geometric.nn import global_add_pool, global_max_pool
 
+from constants import Case
 from gnn.models.encoder import DetectorGraphEncoder
 
 
@@ -49,15 +48,6 @@ class LogicalHead(nn.Module):
         (standard for ``rotated_memory_x``).
     dropout : float, optional
         Dropout probability in the MLP.  Default is 0.1.
-
-    Examples
-    --------
-    >>> head = LogicalHead(hidden_dim=64, num_observables=1)
-    >>> h = torch.randn(18, 64)          # 3 graphs batched, 6 nodes each
-    >>> batch = torch.tensor([0]*6 + [1]*6 + [2]*6)
-    >>> logits = head(h, batch)
-    >>> logits.shape
-    torch.Size([3, 1])
     """
 
     def __init__(
@@ -129,16 +119,6 @@ class EdgeHead(nn.Module):
         (``[error_prob, weight]``).
     dropout : float, optional
         Dropout probability in the MLP.  Default is 0.1.
-
-    Examples
-    --------
-    >>> head = EdgeHead(hidden_dim=64, edge_dim=2)
-    >>> h = torch.randn(10, 64)
-    >>> edge_index = torch.randint(0, 10, (2, 30))
-    >>> edge_attr = torch.randn(30, 2)
-    >>> logits = head(h, edge_index=edge_index, edge_attr=edge_attr)
-    >>> logits.shape
-    torch.Size([30])
     """
 
     def __init__(
@@ -205,12 +185,6 @@ class QECDecoder(nn.Module):
         Shared message-passing backbone.
     head : LogicalHead or EdgeHead
         Task-specific prediction head.
-
-    Examples
-    --------
-    >>> model = build_model("logical_head", hidden_dim=64)
-    >>> batch = Batch.from_data_list([data1, data2])
-    >>> logits = model(batch)
     """
 
     def __init__(
@@ -246,9 +220,6 @@ class QECDecoder(nn.Module):
             edge_index=batch.edge_index,
             edge_attr=batch.edge_attr,
         )
-
-
-Case = Literal["logical_head", "mwpm_teacher", "hybrid"]
 
 
 def build_model(
@@ -291,12 +262,6 @@ def build_model(
     ------
     ValueError
         If *case* is not one of the supported values.
-
-    Examples
-    --------
-    >>> model = build_model("logical_head", hidden_dim=64, num_layers=4)
-    >>> model = build_model("mwpm_teacher", hidden_dim=128)
-    >>> model = build_model("hybrid", hidden_dim=128, num_layers=8)
     """
     encoder = DetectorGraphEncoder(
         node_dim=node_dim,
