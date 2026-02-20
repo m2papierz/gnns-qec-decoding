@@ -45,30 +45,39 @@ class TestLogicalHead:
         head = LogicalHead(hidden_dim=32, num_observables=1, dropout=0.0)
         h = torch.randn(18, 32)
         batch = torch.tensor([0] * 6 + [1] * 6 + [2] * 6)
-        logits = head(h, batch)
+        ei = torch.randint(0, 18, (2, 30))
+        edge_h = torch.randn(30, 32)
+        logits = head(h, batch, edge_index=ei, edge_h=edge_h)
         assert logits.shape == (3, 1)
 
     def test_output_shape_multi_observable(self) -> None:
         head = LogicalHead(hidden_dim=32, num_observables=3, dropout=0.0)
         h = torch.randn(10, 32)
         batch = torch.tensor([0] * 4 + [1] * 6)
-        logits = head(h, batch)
+        ei = torch.randint(0, 10, (2, 16))
+        edge_h = torch.randn(16, 32)
+        logits = head(h, batch, edge_index=ei, edge_h=edge_h)
         assert logits.shape == (2, 3)
 
     def test_ignores_extra_kwargs(self) -> None:
         head = LogicalHead(hidden_dim=16, dropout=0.0)
         h = torch.randn(5, 16)
         batch = torch.zeros(5, dtype=torch.long)
-        logits = head(h, batch, edge_index=None, edge_attr=None, edge_h=None)
+        ei = torch.randint(0, 5, (2, 8))
+        edge_h = torch.randn(8, 16)
+        logits = head(h, batch, edge_index=ei, edge_h=edge_h, edge_attr=None)
         assert logits.shape == (1, 1)
 
     def test_gradient_flow(self) -> None:
         head = LogicalHead(hidden_dim=16, dropout=0.0)
         h = torch.randn(8, 16, requires_grad=True)
         batch = torch.tensor([0] * 4 + [1] * 4)
-        logits = head(h, batch)
+        ei = torch.randint(0, 8, (2, 12))
+        edge_h = torch.randn(12, 16, requires_grad=True)
+        logits = head(h, batch, edge_index=ei, edge_h=edge_h)
         logits.sum().backward()
         assert h.grad is not None
+        assert edge_h.grad is not None
 
 
 class TestEdgeHead:

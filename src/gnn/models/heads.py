@@ -4,7 +4,7 @@ Decoding heads and full decoder for QEC graph decoding.
 Two head architectures cover all three training modes:
 
 - :class:`LogicalHead` — graph-level classification of observable flips
-  using attention-weighted pooling.
+  using attention-weighted node pooling and edge embedding pooling.
 - :class:`EdgeHead` — per-edge binary prediction using learned edge
   embeddings from the encoder.
 
@@ -29,9 +29,9 @@ class LogicalHead(nn.Module):
     """
     Graph-level head for predicting logical observable flips.
 
-    Uses attention-weighted sum pooling (letting the model focus on
-    informative detector nodes rather than being dominated by
-    zero-syndrome background) concatenated with max pooling.
+    Combines attention-weighted node pooling with mean edge embedding
+    pooling, giving the head access to both node- and edge-level
+    representations from the encoder.
 
     Parameters
     ----------
@@ -56,8 +56,9 @@ class LogicalHead(nn.Module):
             nn.Tanh(),
             nn.Linear(hidden_dim, 1),
         )
+        # Input: attn_pool (H) | max_pool (H) | edge_mean_pool (H)
         self.mlp = nn.Sequential(
-            nn.Linear(2 * hidden_dim, hidden_dim),
+            nn.Linear(3 * hidden_dim, hidden_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, num_observables),
@@ -67,6 +68,8 @@ class LogicalHead(nn.Module):
         self,
         h: torch.Tensor,
         batch: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_h: torch.Tensor,
         **kwargs: object,
     ) -> torch.Tensor:
         """Predict logical observable logits.
@@ -77,6 +80,10 @@ class LogicalHead(nn.Module):
             Node embeddings from the encoder (batched).
         batch : Tensor, shape (N_total,)
             PyG batch vector mapping each node to its graph index.
+        edge_index : Tensor, shape (2, E_total)
+            Directed edge indices (used to assign edges to graphs).
+        edge_h : Tensor, shape (E_total, hidden_dim)
+            Learned edge embeddings from the encoder.
 
         Returns
         -------
@@ -85,7 +92,17 @@ class LogicalHead(nn.Module):
         attn = softmax(self.gate(h), batch)
         g_attn = global_add_pool(h * attn, batch)
         g_max = global_max_pool(h, batch)
-        return self.mlp(torch.cat([g_attn, g_max], dim=-1))
+
+        edge_batch = batch[edge_index[0]]
+        g_edge = global_add_pool(edge_h, edge_batch)
+        n_graphs = int(batch.max()) + 1
+        edge_counts = torch.zeros(n_graphs, device=h.device)
+        edge_counts.scatter_add_(
+            0, edge_batch, torch.ones(edge_batch.shape[0], device=h.device)
+        )
+        g_edge = g_edge / edge_counts.clamp(min=1).unsqueeze(-1)
+
+        return self.mlp(torch.cat([g_attn, g_max, g_edge], dim=-1))
 
 
 class EdgeHead(nn.Module):
