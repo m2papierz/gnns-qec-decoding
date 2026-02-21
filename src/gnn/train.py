@@ -294,6 +294,8 @@ def train_one_epoch(
     num_batches = 0
     total_graphs = 0
     total_errors = 0
+    edge_correct = 0
+    edge_total = 0
 
     for batch in loader:
         batch = batch.to(device)
@@ -314,12 +316,16 @@ def train_one_epoch(
         scaler.step(optimizer)
         scaler.update()
 
-        if case == "logical_head":
-            with torch.no_grad():
+        with torch.no_grad():
+            if case == "logical_head":
                 pred = (logits > 0.0).float()
                 target_2d = batch.y.view_as(pred)
                 total_graphs += pred.shape[0]
                 total_errors += int((pred != target_2d).any(dim=1).sum().item())
+            else:
+                pred = (logits > 0.0).float()
+                edge_correct += int((pred == batch.y).sum().item())
+                edge_total += int(batch.y.numel())
 
         total_loss += loss.item()
         num_batches += 1
@@ -328,6 +334,8 @@ def train_one_epoch(
 
     if case == "logical_head" and total_graphs > 0:
         metrics["ler"] = total_errors / total_graphs
+    if case != "logical_head" and edge_total > 0:
+        metrics["edge_acc"] = edge_correct / edge_total
 
     return metrics
 
