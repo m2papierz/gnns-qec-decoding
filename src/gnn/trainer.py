@@ -107,9 +107,16 @@ class TrainConfig:
         flat: Dict[str, Any] = {}
 
         for key in (
-            "case", "datasets_dir", "output_dir", "num_workers",
-            "edge_pos_weight", "max_grad_norm", "patience", "val_every",
-            "seed", "max_samples",
+            "case",
+            "datasets_dir",
+            "output_dir",
+            "num_workers",
+            "edge_pos_weight",
+            "max_grad_norm",
+            "patience",
+            "val_every",
+            "seed",
+            "max_samples",
         ):
             if key in raw:
                 flat[key] = raw[key]
@@ -184,11 +191,7 @@ def _build_criterion(
     """Build the loss function for a given training case."""
     if case == "logical_head":
         return nn.BCEWithLogitsLoss()
-    pw = (
-        torch.tensor([pos_weight], device=device)
-        if pos_weight is not None
-        else None
-    )
+    pw = torch.tensor([pos_weight], device=device) if pos_weight is not None else None
     return _GraphNormalizedBCE(pos_weight=pw)
 
 
@@ -219,7 +222,10 @@ def _estimate_edge_pos_weight(
     clamped = float(np.clip(raw, 1.0, 200.0))
     logger.info(
         "Edge label balance: %d pos / %d neg → raw=%.1f, pos_weight=%.1f",
-        total_pos, total_neg, raw, clamped,
+        total_pos,
+        total_neg,
+        raw,
+        clamped,
     )
     return clamped
 
@@ -241,9 +247,7 @@ class Trainer:
 
     def __init__(self, cfg: TrainConfig) -> None:
         self.cfg = cfg
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model: QECDecoder
         self.optimizer: AdamW
@@ -265,7 +269,8 @@ class Trainer:
         """Load datasets and build data loaders."""
         logger.info(
             "Loading datasets from %s (case=%s)",
-            self.cfg.datasets_dir, self.cfg.case,
+            self.cfg.datasets_dir,
+            self.cfg.case,
         )
         train_ds = MixedSurfaceCodeDataset(
             datasets_dir=self.cfg.datasets_dir,
@@ -284,12 +289,8 @@ class Trainer:
         if self.cfg.max_samples is not None:
             from torch.utils.data import Subset
 
-            train_ds = Subset(
-                train_ds, range(min(self.cfg.max_samples, len(train_ds)))
-            )
-            val_ds = Subset(
-                val_ds, range(min(self.cfg.max_samples // 5, len(val_ds)))
-            )
+            train_ds = Subset(train_ds, range(min(self.cfg.max_samples, len(train_ds))))
+            val_ds = Subset(val_ds, range(min(self.cfg.max_samples // 5, len(val_ds))))
 
         pin = self.device.type == "cuda"
         self.train_loader = DataLoader(
@@ -309,7 +310,8 @@ class Trainer:
         )
         logger.info(
             "Train: %d samples, Val: %d samples",
-            len(train_ds), len(val_ds),
+            len(train_ds),
+            len(val_ds),
         )
 
     def _setup_model(self) -> None:
@@ -321,9 +323,7 @@ class Trainer:
             dropout=self.cfg.dropout,
         ).to(self.device)
 
-        num_params = sum(
-            p.numel() for p in self.model.parameters() if p.requires_grad
-        )
+        num_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         logger.info("Model: %d trainable parameters", num_params)
 
     def _setup_optimizer(self) -> None:
@@ -337,7 +337,9 @@ class Trainer:
         eta_min = self.cfg.lr / 50
         warmup_epochs = max(1, self.cfg.epochs // 20)
         warmup = LinearLR(
-            self.optimizer, start_factor=0.01, total_iters=warmup_epochs,
+            self.optimizer,
+            start_factor=0.01,
+            total_iters=warmup_epochs,
         )
         cosine = CosineAnnealingLR(
             self.optimizer,
@@ -351,7 +353,9 @@ class Trainer:
         )
         logger.info(
             "Scheduler: LinearWarmup(%dep) → CosineAnnealing(T_max=%d, eta_min=%.1e)",
-            warmup_epochs, self.cfg.epochs - warmup_epochs, eta_min,
+            warmup_epochs,
+            self.cfg.epochs - warmup_epochs,
+            eta_min,
         )
 
     def _setup_criterion(self) -> None:
@@ -361,7 +365,9 @@ class Trainer:
             pos_weight = _estimate_edge_pos_weight(self.train_loader)
 
         self.criterion = _build_criterion(
-            self.cfg.case, pos_weight=pos_weight, device=self.device,
+            self.cfg.case,
+            pos_weight=pos_weight,
+            device=self.device,
         )
 
     def _setup_amp(self) -> None:
@@ -399,7 +405,8 @@ class Trainer:
         self.best_metric = ckpt.get("best_metric", float("inf"))
         logger.info(
             "Resuming from epoch %d (best_metric=%.6f)",
-            self.start_epoch, self.best_metric,
+            self.start_epoch,
+            self.best_metric,
         )
 
     def _save_config(self) -> None:
@@ -434,7 +441,8 @@ class Trainer:
             self.optimizer.zero_grad()
 
             with torch.amp.autocast(
-                device_type=self.device.type, enabled=use_amp,
+                device_type=self.device.type,
+                enabled=use_amp,
             ):
                 logits = self.model(batch)
                 if self.cfg.case == "logical_head":
@@ -445,7 +453,8 @@ class Trainer:
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.cfg.max_grad_norm,
+                self.model.parameters(),
+                self.cfg.max_grad_norm,
             )
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -455,9 +464,7 @@ class Trainer:
                     pred = (logits > 0.0).float()
                     target_2d = batch.y.view_as(pred)
                     total_graphs += pred.shape[0]
-                    total_errors += int(
-                        (pred != target_2d).any(dim=1).sum().item()
-                    )
+                    total_errors += int((pred != target_2d).any(dim=1).sum().item())
 
             total_loss += loss.item()
             num_batches += 1
@@ -494,7 +501,8 @@ class Trainer:
             batch = batch.to(self.device)
 
             with torch.amp.autocast(
-                device_type=self.device.type, enabled=use_amp,
+                device_type=self.device.type,
+                enabled=use_amp,
             ):
                 logits = self.model(batch)
                 if self.cfg.case == "logical_head":
@@ -506,9 +514,7 @@ class Trainer:
                 pred = (logits > 0.0).float()
                 target_2d = batch.y.view_as(pred)
                 total_graphs += pred.shape[0]
-                total_errors += int(
-                    (pred != target_2d).any(dim=1).sum().item()
-                )
+                total_errors += int((pred != target_2d).any(dim=1).sum().item())
             else:
                 pred = (logits > 0.0).float()
                 edge_correct += int((pred == batch.y).sum().item())
@@ -572,7 +578,9 @@ class Trainer:
 
         logger.info(
             "Starting training: %d epochs (val_every=%d, patience=%d)",
-            self.cfg.epochs, self.cfg.val_every, self.cfg.patience,
+            self.cfg.epochs,
+            self.cfg.val_every,
+            self.cfg.patience,
         )
 
         for epoch in range(self.start_epoch, self.cfg.epochs):
@@ -596,24 +604,33 @@ class Trainer:
                     self.best_metric = current
                     epochs_without_improvement = 0
                     self.save_checkpoint(
-                        self._best_path, epoch, self.best_metric,
+                        self._best_path,
+                        epoch,
+                        self.best_metric,
                     )
                 else:
                     epochs_without_improvement += 1
 
                 logger.info(
                     "Epoch %3d/%d [%.1fs, lr=%.1e]  train: %s  val: %s%s",
-                    epoch + 1, self.cfg.epochs, elapsed, lr,
+                    epoch + 1,
+                    self.cfg.epochs,
+                    elapsed,
+                    lr,
                     _format_metrics(train_metrics),
                     _format_metrics(val_metrics),
                     " *" if improved else "",
                 )
-                self.history.append({
-                    "epoch": epoch, "lr": lr,
-                    "elapsed_s": round(elapsed, 2),
-                    "train": train_metrics, "val": val_metrics,
-                    "best": improved,
-                })
+                self.history.append(
+                    {
+                        "epoch": epoch,
+                        "lr": lr,
+                        "elapsed_s": round(elapsed, 2),
+                        "train": train_metrics,
+                        "val": val_metrics,
+                        "best": improved,
+                    }
+                )
 
                 if (
                     self.cfg.patience > 0
@@ -621,27 +638,37 @@ class Trainer:
                 ):
                     logger.info(
                         "Early stopping at epoch %d (%d val rounds w/o improvement)",
-                        epoch + 1, self.cfg.patience,
+                        epoch + 1,
+                        self.cfg.patience,
                     )
                     break
             else:
                 logger.info(
                     "Epoch %3d/%d [%.1fs, lr=%.1e]  train: %s",
-                    epoch + 1, self.cfg.epochs, elapsed, lr,
+                    epoch + 1,
+                    self.cfg.epochs,
+                    elapsed,
+                    lr,
                     _format_metrics(train_metrics),
                 )
-                self.history.append({
-                    "epoch": epoch, "lr": lr,
-                    "elapsed_s": round(elapsed, 2),
-                    "train": train_metrics,
-                })
+                self.history.append(
+                    {
+                        "epoch": epoch,
+                        "lr": lr,
+                        "elapsed_s": round(elapsed, 2),
+                        "train": train_metrics,
+                    }
+                )
 
         history_path = self._run_dir / "history.json"
         history_path.write_text(
-            json.dumps(self.history, indent=2), encoding="utf-8",
+            json.dumps(self.history, indent=2),
+            encoding="utf-8",
         )
         logger.info(
-            "Training complete. Best %s=%.6f", metric_key, self.best_metric,
+            "Training complete. Best %s=%.6f",
+            metric_key,
+            self.best_metric,
         )
         logger.info("Best checkpoint: %s", self._best_path)
 

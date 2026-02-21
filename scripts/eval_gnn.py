@@ -1,18 +1,10 @@
-"""
-Evaluate a trained GNN decoder and compare with MWPM baseline.
+"""Evaluate a trained GNN decoder and compare with MWPM baseline.
 
 Examples
 --------
-    # Evaluate on test split
     uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt
-
-    # Compare with MWPM baseline
     uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \\
         --baseline outputs/results/mwpm_baseline.json
-
-    # Save JSON report to custom path
-    uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \\
-        -o outputs/results/gnn_logical.json
 """
 
 import argparse
@@ -35,45 +27,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--checkpoint",
         type=Path,
         required=True,
-        help="Path to model checkpoint (e.g. outputs/runs/logical_head/best.pt)",
+        help="Path to model checkpoint",
     )
     parser.add_argument(
         "--datasets-dir",
         type=Path,
         default=Path("data/datasets"),
-        help="Root directory of packaged datasets",
     )
-    parser.add_argument(
-        "--split",
-        type=str,
-        default="test",
-        help="Data split to evaluate (default: test)",
-    )
-    parser.add_argument(
-        "--baseline",
-        type=Path,
-        default=None,
-        help="MWPM baseline JSON report for comparison",
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=256,
-        help="Shots per inference batch (default: 256)",
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        default=None,
-        help="Save JSON report to this path (default: next to checkpoint)",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable DEBUG logging",
-    )
+    parser.add_argument("--split", type=str, default="test")
+    parser.add_argument("--baseline", type=Path, default=None)
+    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("-o", "--output", type=Path, default=None)
+    parser.add_argument("-v", "--verbose", action="store_true")
 
     return parser.parse_args(argv)
 
@@ -91,7 +56,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         batch_size=args.batch_size,
     )
     report = evaluator.run()
-
     print_report(report)
 
     output_path = args.output

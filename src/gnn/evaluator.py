@@ -5,7 +5,6 @@ Computes per-setting logical error rates (LER) for a trained checkpoint,
 with optional comparison against MWPM baseline results.
 
 Three evaluation protocols match the three training cases:
-
 - ``logical_head``: threshold graph-level logits at 0 => observable flip.
 - ``mwpm_teacher`` / ``hybrid``: convert per-edge logits to MWPM
   weights => decode with PyMatching => LER.
@@ -104,7 +103,7 @@ class Evaluator:
     datasets_dir : Path
         Root datasets directory.
     split : str
-        Data split to evaluate (default: ``"test"``).
+        Data split to evaluate.
     baseline_path : Path or None
         Path to MWPM baseline JSON report for comparison.
     batch_size : int
@@ -125,16 +124,16 @@ class Evaluator:
         self.baseline_path = baseline_path
         self.batch_size = batch_size
 
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model, self.cfg = self._load_model()
         self.case: Case = self.cfg["case"]
 
     def _load_model(self) -> tuple[QECDecoder, Dict[str, Any]]:
         """Load model from checkpoint."""
         ckpt = torch.load(
-            self.checkpoint, map_location=self.device, weights_only=False
+            self.checkpoint,
+            map_location=self.device,
+            weights_only=False,
         )
         cfg = ckpt["config"]
 
@@ -162,23 +161,20 @@ class Evaluator:
         case_root = self.datasets_dir / self.case
         settings_obj = read_json(case_root / "settings.json")
 
-        metas = []
-        for s in settings_obj["settings"]:
-            g = s["graph"]
-            metas.append(
-                _SettingMeta(
-                    setting_id=int(s["setting_id"]),
-                    relpath=str(s["relpath"]),
-                    distance=int(s["distance"]),
-                    rounds=int(s["rounds"]),
-                    error_prob=float(s["error_prob"]),
-                    num_nodes=int(g["num_nodes"]),
-                    num_detectors=int(g["num_detectors"]),
-                    num_observables=int(g["num_observables"]),
-                    has_boundary=bool(g.get("has_boundary", False)),
-                )
+        return [
+            _SettingMeta(
+                setting_id=int(s["setting_id"]),
+                relpath=str(s["relpath"]),
+                distance=int(s["distance"]),
+                rounds=int(s["rounds"]),
+                error_prob=float(s["error_prob"]),
+                num_nodes=int(s["graph"]["num_nodes"]),
+                num_detectors=int(s["graph"]["num_detectors"]),
+                num_observables=int(s["graph"]["num_observables"]),
+                has_boundary=bool(s["graph"].get("has_boundary", False)),
             )
-        return metas
+            for s in settings_obj["settings"]
+        ]
 
     def _load_baseline(self) -> Dict[tuple, float]:
         """Load MWPM baseline LER values if available."""
@@ -194,7 +190,8 @@ class Evaluator:
         return baseline
 
     def _load_setting_data(
-        self, meta: _SettingMeta
+        self,
+        meta: _SettingMeta,
     ) -> tuple[torch.Tensor, torch.Tensor, np.ndarray, np.ndarray, np.ndarray]:
         """Load graph and split arrays for one setting."""
         shard = self.datasets_dir / self.case / "shards" / meta.relpath
@@ -206,12 +203,8 @@ class Evaluator:
         edge_index = torch.from_numpy(ei_np).long()
         edge_attr = torch.from_numpy(ea_np).float()
 
-        syndrome = np.load(
-            shard / f"{self.split}_syndrome.npy"
-        ).astype(np.uint8)
-        logical = np.load(
-            shard / f"{self.split}_logical.npy"
-        ).astype(np.uint8)
+        syndrome = np.load(shard / f"{self.split}_syndrome.npy").astype(np.uint8)
+        logical = np.load(shard / f"{self.split}_logical.npy").astype(np.uint8)
         if logical.ndim == 1:
             logical = logical[:, np.newaxis]
 
@@ -227,34 +220,26 @@ class Evaluator:
         start: int,
         end: int,
     ) -> Batch:
-        """Build a PyG Batch from a slice of syndrome shots."""
+        """Build a PyG Batch from a slice of syndrome shots (vectorized)."""
         n = end - start
 
         det = torch.from_numpy(
-            syndrome[start:end].astype(np.float32, copy=False)
+            syndrome[start:end].astype(np.float32, copy=False),
         )
         if num_nodes > num_detectors:
             pad = torch.zeros(n, num_nodes - num_detectors, dtype=torch.float32)
             det = torch.cat([det, pad], dim=1)
         x = det.reshape(-1, 1)
 
-        offsets = (
-            torch.arange(n, dtype=torch.long).unsqueeze(1) * num_nodes
-        )
-        ei_rep = (
-            edge_index.unsqueeze(0).expand(n, -1, -1) + offsets.unsqueeze(1)
-        )
+        offsets = torch.arange(n, dtype=torch.long).unsqueeze(1) * num_nodes
+        ei_rep = edge_index.unsqueeze(0).expand(n, -1, -1) + offsets.unsqueeze(1)
         ei_batch = ei_rep.permute(1, 0, 2).reshape(2, -1)
 
         ea_batch = (
-            edge_attr.unsqueeze(0)
-            .expand(n, -1, -1)
-            .reshape(-1, edge_attr.shape[1])
+            edge_attr.unsqueeze(0).expand(n, -1, -1).reshape(-1, edge_attr.shape[1])
         )
 
-        batch_vec = torch.arange(n, dtype=torch.long).repeat_interleave(
-            num_nodes
-        )
+        batch_vec = torch.arange(n, dtype=torch.long).repeat_interleave(num_nodes)
 
         return Batch(
             x=x,
@@ -280,14 +265,18 @@ class Evaluator:
         for off in range(0, n, self.batch_size):
             end = min(off + self.batch_size, n)
             batch = self._build_batch(
-                syndrome, edge_index, edge_attr,
-                num_nodes, num_detectors, off, end,
+                syndrome,
+                edge_index,
+                edge_attr,
+                num_nodes,
+                num_detectors,
+                off,
+                end,
             ).to(self.device)
 
             logits = self.model(batch)
             pred = (logits > 0.0).cpu().numpy().astype(np.uint8)
-            errors = np.any(pred != logical[off:end], axis=1)
-            num_errors += int(errors.sum())
+            num_errors += int(np.any(pred != logical[off:end], axis=1).sum())
 
         return n, num_errors
 
@@ -316,26 +305,35 @@ class Evaluator:
         for off in range(0, n, self.batch_size):
             end = min(off + self.batch_size, n)
             batch = self._build_batch(
-                syndrome, edge_index, edge_attr,
-                num_nodes, num_detectors, off, end,
+                syndrome,
+                edge_index,
+                edge_attr,
+                num_nodes,
+                num_detectors,
+                off,
+                end,
             ).to(self.device)
 
             logits_np = self.model(batch).cpu().numpy()
 
             for g in range(end - off):
                 start_e = g * edges_per_graph
-                end_e = start_e + edges_per_graph
-                graph_logits = logits_np[start_e:end_e]
+                graph_logits = logits_np[start_e : start_e + edges_per_graph]
 
                 und_logits = _directed_to_undirected_logits(
-                    graph_logits, dir_to_undir, num_und
+                    graph_logits,
+                    dir_to_undir,
+                    num_und,
                 )
                 weights = _logits_to_weights(und_logits)
 
                 cache_key = weights.tobytes()
                 if cache_key not in matching_cache:
                     matching_cache[cache_key] = _build_matching_from_weights(
-                        und_pairs, weights, num_detectors, has_boundary
+                        und_pairs,
+                        weights,
+                        num_detectors,
+                        has_boundary,
                     )
 
                 pred = matching_cache[cache_key].decode(syndrome[off + g])
@@ -380,13 +378,7 @@ class Evaluator:
             t0 = time.perf_counter()
 
             try:
-                (
-                    edge_index,
-                    edge_attr,
-                    syndrome,
-                    logical,
-                    ei_np,
-                ) = self._load_setting_data(meta)
+                ei, ea, syndrome, logical, ei_np = self._load_setting_data(meta)
             except FileNotFoundError as exc:
                 logger.warning(
                     "Skipping d=%d r=%d p=%s: %s",
@@ -399,15 +391,25 @@ class Evaluator:
 
             if self.case == "logical_head":
                 num_shots, num_errors = self._eval_logical_head(
-                    edge_index, edge_attr, syndrome, logical,
-                    meta.num_nodes, meta.num_detectors,
+                    ei,
+                    ea,
+                    syndrome,
+                    logical,
+                    meta.num_nodes,
+                    meta.num_detectors,
                 )
                 edge_acc = None
             else:
                 num_shots, num_errors, edge_acc = self._eval_edge_case(
-                    edge_index, edge_attr, ei_np, syndrome, logical,
-                    meta.num_nodes, meta.num_detectors,
-                    meta.has_boundary, meta.num_observables,
+                    ei,
+                    ea,
+                    ei_np,
+                    syndrome,
+                    logical,
+                    meta.num_nodes,
+                    meta.num_detectors,
+                    meta.has_boundary,
+                    meta.num_observables,
                 )
 
             elapsed = time.perf_counter() - t0

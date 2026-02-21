@@ -2,8 +2,7 @@
 Shared evaluation result types for QEC decoders.
 
 Provides :class:`SettingResult` and :class:`EvalReport` used by both
-the GNN evaluator and the MWPM baseline script, eliminating the
-previous duplication across modules.
+the GNN evaluator and the MWPM baseline script.
 """
 
 from __future__ import annotations
@@ -27,24 +26,20 @@ class SettingResult:
 
     Attributes
     ----------
-    distance : int
-        Code distance.
-    rounds : int
-        Number of syndrome measurement rounds.
+    distance, rounds : int
+        Code distance and syndrome measurement rounds.
     error_prob : float
         Physical error probability.
     split : str
         Evaluated split name.
-    num_shots : int
-        Total number of shots evaluated.
-    num_errors : int
-        Shots where the decoder predicted the wrong observable.
+    num_shots, num_errors : int
+        Total shots and decoder errors.
     logical_error_rate : float
         ``num_errors / num_shots``.
     elapsed_s : float
         Wall-clock seconds for this setting.
     mwpm_ler : float or None
-        MWPM baseline LER for comparison (if available).
+        MWPM baseline LER for comparison.
     edge_acc : float or None
         Per-edge accuracy (edge cases only).
     """
@@ -103,13 +98,7 @@ class EvalReport:
         }
 
     def save(self, path: Path) -> None:
-        """Save report to a JSON file.
-
-        Parameters
-        ----------
-        path : Path
-            Output file path.
-        """
+        """Save report to a JSON file."""
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(self.to_dict(), indent=2),
@@ -119,14 +108,7 @@ class EvalReport:
 
 
 def print_report(report: EvalReport) -> None:
-    """
-    Log a formatted summary table.
-
-    Parameters
-    ----------
-    report : EvalReport
-        Evaluation report to display.
-    """
+    """Log a formatted summary table."""
     results = report.results
     if not results:
         logger.warning("No results to display")
@@ -141,20 +123,14 @@ def print_report(report: EvalReport) -> None:
             f"{'shots':>7} {'GNN_LER':>10} {'MWPM_LER':>10} {'delta':>8}"
         )
     else:
-        header = f"{'d':>3} {'r':>4} {'p':>9} " f"{'shots':>7} {'LER':>10}"
+        header = f"{'d':>3} {'r':>4} {'p':>9} {'shots':>7} {'LER':>10}"
 
     sep = "-" * len(header)
-    lines: list[str] = []
-
-    lines.append("")
-    lines.append(sep)
-    lines.append(f"Evaluation — {case}")
-    lines.append(sep)
-    lines.append(header)
-    lines.append(sep)
+    lines: list[str] = ["", sep, f"Evaluation — {case}", sep, header, sep]
 
     sorted_results = sorted(
-        results, key=lambda r: (r.distance, r.rounds, r.error_prob)
+        results,
+        key=lambda r: (r.distance, r.rounds, r.error_prob),
     )
 
     prev_d = None

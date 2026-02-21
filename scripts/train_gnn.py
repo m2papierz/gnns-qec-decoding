@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Sequence
 
 from cli import setup_logging
-from gnn.trainer import Trainer, TrainConfig
+from gnn.trainer import TrainConfig, Trainer
 
 
 def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
@@ -34,11 +34,16 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
     )
 
     parser.add_argument(
-        "-c", "--config", type=Path, default=Path("configs/train.yaml"),
+        "-c",
+        "--config",
+        type=Path,
+        default=Path("configs/train.yaml"),
         help="YAML config file (CLI args override config values)",
     )
     parser.add_argument(
-        "--case", type=str, default=None,
+        "--case",
+        type=str,
+        default=None,
         choices=["logical_head", "mwpm_teacher", "hybrid"],
     )
     parser.add_argument("--datasets-dir", type=Path, default=None)
@@ -67,7 +72,8 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
         cfg = TrainConfig.from_yaml(args.config)
     elif args.config is not None and not args.config.is_file():
         logging.getLogger(__name__).warning(
-            "Config file %s not found, using defaults", args.config,
+            "Config file %s not found, using defaults",
+            args.config,
         )
         cfg = TrainConfig()
     else:

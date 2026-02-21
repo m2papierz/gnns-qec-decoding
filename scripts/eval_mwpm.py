@@ -26,6 +26,7 @@ import pymatching
 import stim
 from tqdm import tqdm
 
+
 _SRC = Path(__file__).resolve().parent.parent / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
@@ -52,12 +53,12 @@ def _load_or_build_circuit(
     circuit_path = setting_dir / "circuit.stim"
 
     if not regenerate and circuit_path.is_file():
-        logger.debug("Loading circuit from %s", circuit_path)
         return stim.Circuit.from_file(str(circuit_path))
 
-    if not regenerate and not circuit_path.is_file():
+    if not regenerate:
         logger.warning(
-            "No saved circuit at %s; rebuilding from config", circuit_path
+            "No saved circuit at %s; rebuilding from config",
+            circuit_path,
         )
 
     return build_circuit(cfg, distance, rounds, p)
@@ -98,7 +99,12 @@ def evaluate_setting(
     setting_dir = cfg.setting_dir(distance, rounds, p)
 
     circuit = _load_or_build_circuit(
-        cfg, setting_dir, distance, rounds, p, regenerate=regenerate,
+        cfg,
+        setting_dir,
+        distance,
+        rounds,
+        p,
+        regenerate=regenerate,
     )
     dem = circuit.detector_error_model(decompose_errors=True)
     matching = pymatching.Matching.from_detector_error_model(dem)
@@ -110,14 +116,12 @@ def evaluate_setting(
     if syndrome.shape[1] != dem.num_detectors:
         raise ValueError(
             f"Syndrome width {syndrome.shape[1]} != "
-            f"num_detectors {dem.num_detectors} "
-            f"(d={distance}, r={rounds}, p={p})"
+            f"num_detectors {dem.num_detectors} (d={distance}, r={rounds}, p={p})"
         )
     if logical_true.shape[1] != num_obs:
         raise ValueError(
             f"Logical width {logical_true.shape[1]} != "
-            f"num_observables {num_obs} "
-            f"(d={distance}, r={rounds}, p={p})"
+            f"num_observables {num_obs} (d={distance}, r={rounds}, p={p})"
         )
 
     predicted = np.empty((num_shots, num_obs), dtype=np.uint8)
@@ -125,14 +129,12 @@ def evaluate_setting(
 
     for off in range(0, num_shots, chunk_size):
         end = min(off + chunk_size, num_shots)
-        batch = syndrome[off:end]
-        predicted[off:end] = matching.decode_batch(batch)[:, :num_obs]
+        predicted[off:end] = matching.decode_batch(syndrome[off:end])[:, :num_obs]
 
     elapsed = time.perf_counter() - t0
 
     shot_errors = np.any(predicted != logical_true, axis=1)
     num_errors = int(shot_errors.sum())
-    ler = num_errors / num_shots
 
     return SettingResult(
         distance=distance,
@@ -141,7 +143,7 @@ def evaluate_setting(
         split=split,
         num_shots=num_shots,
         num_errors=num_errors,
-        logical_error_rate=ler,
+        logical_error_rate=num_errors / num_shots,
         elapsed_s=elapsed,
     )
 
@@ -182,8 +184,13 @@ def evaluate_all(
         for split in splits:
             try:
                 result = evaluate_setting(
-                    cfg, d, r, p, split,
-                    regenerate=regenerate, chunk_size=chunk_size,
+                    cfg,
+                    d,
+                    r,
+                    p,
+                    split,
+                    regenerate=regenerate,
+                    chunk_size=chunk_size,
                 )
                 report.results.append(result)
                 progress.set_postfix_str(
@@ -191,11 +198,20 @@ def evaluate_all(
                 )
             except FileNotFoundError as exc:
                 logger.warning(
-                    "Skipping d=%d r=%d p=%s split=%s: %s", d, r, p, split, exc
+                    "Skipping d=%d r=%d p=%s split=%s: %s",
+                    d,
+                    r,
+                    p,
+                    split,
+                    exc,
                 )
             except Exception:
                 logger.exception(
-                    "Failed: d=%d r=%d p=%s split=%s", d, r, p, split
+                    "Failed: d=%d r=%d p=%s split=%s",
+                    d,
+                    r,
+                    p,
+                    split,
                 )
             progress.update(1)
 
@@ -209,16 +225,18 @@ def _ler_stderr(ler: float, n: int) -> float:
     return np.sqrt(ler * (1.0 - ler) / n)
 
 
-def _is_significant(
-    ler_a: float, n_a: int, ler_b: float, n_b: int
-) -> bool:
-    se = np.sqrt(
-        _ler_stderr(ler_a, n_a) ** 2 + _ler_stderr(ler_b, n_b) ** 2
-    )
+def _is_significant(ler_a: float, n_a: int, ler_b: float, n_b: int) -> bool:
+    se = np.sqrt(_ler_stderr(ler_a, n_a) ** 2 + _ler_stderr(ler_b, n_b) ** 2)
     return abs(ler_a - ler_b) > 2.0 * se
 
 
 def _estimate_threshold(results: List[SettingResult]) -> float:
+    """
+    Estimate error-correction threshold from crossover data.
+
+    Finds the smallest ``p`` where the largest code distance has
+    higher LER than the smallest.
+    """
     distances = sorted(set(r.distance for r in results))
     if len(distances) < 2:
         return float("inf")
@@ -229,25 +247,24 @@ def _estimate_threshold(results: List[SettingResult]) -> float:
     for split in set(r.split for r in results):
         for r_val in set(r.rounds for r in results):
             low_d = [
-                r for r in results
+                r
+                for r in results
                 if r.distance == d_min and r.rounds == r_val and r.split == split
             ]
             high_d = [
-                r for r in results
+                r
+                for r in results
                 if r.distance == d_max and r.rounds == r_val and r.split == split
             ]
             low_map = {r.error_prob: r for r in low_d}
             high_map = {r.error_prob: r for r in high_d}
 
             for p in sorted(low_map.keys() & high_map.keys()):
-                rl, rh = low_map[p], high_map[p]
-                if rh.logical_error_rate > rl.logical_error_rate:
+                if high_map[p].logical_error_rate > low_map[p].logical_error_rate:
                     crossover_ps.append(p)
                     break
 
-    if not crossover_ps:
-        return float("inf")
-    return float(np.median(crossover_ps))
+    return float(np.median(crossover_ps)) if crossover_ps else float("inf")
 
 
 def _run_sanity_checks(report: EvalReport) -> None:
@@ -258,43 +275,44 @@ def _run_sanity_checks(report: EvalReport) -> None:
 
     threshold_p = _estimate_threshold(results)
     if threshold_p < float("inf"):
-        logger.info(
-            "Estimated error-correction threshold: p ≈ %.4f", threshold_p
-        )
+        logger.info("Estimated error-correction threshold: p ≈ %.4f", threshold_p)
 
-    # Check 1: LER should increase with p for fixed (d, r)
+    # LER should increase with p for fixed (d, r)
     for split in sorted(set(r.split for r in results)):
         for d in sorted(set(r.distance for r in results)):
             for r_val in sorted(set(r.rounds for r in results)):
                 subset = sorted(
                     [
-                        r for r in results
-                        if r.distance == d
-                        and r.rounds == r_val
-                        and r.split == split
+                        r
+                        for r in results
+                        if r.distance == d and r.rounds == r_val and r.split == split
                     ],
                     key=lambda x: x.error_prob,
                 )
-                if len(subset) < 2:
-                    continue
                 for i in range(1, len(subset)):
                     prev, curr = subset[i - 1], subset[i]
                     if curr.logical_error_rate >= prev.logical_error_rate:
                         continue
                     if not _is_significant(
-                        prev.logical_error_rate, prev.num_shots,
-                        curr.logical_error_rate, curr.num_shots,
+                        prev.logical_error_rate,
+                        prev.num_shots,
+                        curr.logical_error_rate,
+                        curr.num_shots,
                     ):
                         continue
                     logger.warning(
                         "Non-monotonic LER: [%s] d=%d r=%d "
                         "p=%.5f (LER=%.6f) > p=%.5f (LER=%.6f)",
-                        split, d, r_val,
-                        prev.error_prob, prev.logical_error_rate,
-                        curr.error_prob, curr.logical_error_rate,
+                        split,
+                        d,
+                        r_val,
+                        prev.error_prob,
+                        prev.logical_error_rate,
+                        curr.error_prob,
+                        curr.logical_error_rate,
                     )
 
-    # Check 2: LER should decrease with d — only below threshold
+    # LER should decrease with d — only below threshold
     for split in sorted(set(r.split for r in results)):
         for p in sorted(set(r.error_prob for r in results)):
             if p >= threshold_p:
@@ -302,31 +320,33 @@ def _run_sanity_checks(report: EvalReport) -> None:
             for r_val in sorted(set(r.rounds for r in results)):
                 subset = sorted(
                     [
-                        r for r in results
-                        if r.error_prob == p
-                        and r.rounds == r_val
-                        and r.split == split
+                        r
+                        for r in results
+                        if r.error_prob == p and r.rounds == r_val and r.split == split
                     ],
                     key=lambda x: x.distance,
                 )
-                if len(subset) < 2:
-                    continue
                 for i in range(1, len(subset)):
                     prev, curr = subset[i - 1], subset[i]
                     if curr.logical_error_rate <= prev.logical_error_rate:
                         continue
                     if not _is_significant(
-                        prev.logical_error_rate, prev.num_shots,
-                        curr.logical_error_rate, curr.num_shots,
+                        prev.logical_error_rate,
+                        prev.num_shots,
+                        curr.logical_error_rate,
+                        curr.num_shots,
                     ):
                         continue
                     logger.warning(
                         "LER increasing with d below threshold: "
-                        "[%s] r=%d p=%.5f "
-                        "d=%d (LER=%.6f) < d=%d (LER=%.6f)",
-                        split, r_val, p,
-                        prev.distance, prev.logical_error_rate,
-                        curr.distance, curr.logical_error_rate,
+                        "[%s] r=%d p=%.5f d=%d (LER=%.6f) < d=%d (LER=%.6f)",
+                        split,
+                        r_val,
+                        p,
+                        prev.distance,
+                        prev.logical_error_rate,
+                        curr.distance,
+                        curr.logical_error_rate,
                     )
 
 
@@ -337,12 +357,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "-c", "--config", type=Path,
+        "-c",
+        "--config",
+        type=Path,
         default=Path("configs/data_generation.yaml"),
     )
-    parser.add_argument(
-        "--splits", nargs="+", default=["test"],
-    )
+    parser.add_argument("--splits", nargs="+", default=["test"])
     parser.add_argument("--regenerate", action="store_true")
     parser.add_argument("--chunk-size", type=int, default=10_000)
     parser.add_argument("-o", "--output", type=Path, default=None)
@@ -366,11 +386,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         sys.exit(1)
 
     logger.info("Config: %s", args.config)
-    logger.info("Family: %s", cfg.family)
-    logger.info("Distances: %s", cfg.distances)
-    logger.info("Rounds: %s", cfg.rounds)
-    logger.info("Error probs: %s", cfg.error_probs)
-    logger.info("Splits: %s", args.splits)
+    logger.info("Distances: %s, Rounds: %s", cfg.distances, cfg.rounds)
+    logger.info("Error probs: %s, Splits: %s", cfg.error_probs, args.splits)
 
     report = evaluate_all(
         cfg,
