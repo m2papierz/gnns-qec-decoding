@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Sequence
 
 from cli import setup_logging
-from gnn.train import TrainConfig, train
+from gnn.train import TrainConfig
+from gnn.trainer import Trainer
 
 
 def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
@@ -84,34 +85,14 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
     )
 
     # Robustness
-    parser.add_argument(
-        "--max-grad-norm",
-        type=float,
-        default=None,
-        help="Maximum gradient norm for clipping (default: 1.0)",
-    )
-    parser.add_argument(
-        "--patience",
-        type=int,
-        default=None,
-        help="Early stopping patience in val rounds (0 = disabled, default: 15)",
-    )
-    parser.add_argument(
-        "--val-every",
-        type=int,
-        default=None,
-        help="Run validation every N epochs (default: 1)",
-    )
+    parser.add_argument("--max-grad-norm", type=float, default=None)
+    parser.add_argument("--patience", type=int, default=None)
+    parser.add_argument("--val-every", type=int, default=None)
 
     # Misc
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--resume", type=Path, default=None)
-    parser.add_argument(
-        "--max-samples",
-        type=int,
-        default=None,
-        help="Cap training samples (val capped at max_samples//5)",
-    )
+    parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("-v", "--verbose", action="store_true")
 
     args = parser.parse_args(argv)
@@ -155,7 +136,6 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
         if value is not None:
             cfg_dict[key] = value
 
-    # Path coercion
     for key in ("datasets_dir", "output_dir"):
         cfg_dict[key] = Path(cfg_dict[key])
     if cfg_dict["resume"] is not None:
@@ -167,7 +147,8 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
 def main(argv: Sequence[str] | None = None) -> None:
     """Entry point for GNN training."""
     cfg = parse_args(argv)
-    train(cfg)
+    trainer = Trainer(cfg)
+    trainer.fit()
 
 
 if __name__ == "__main__":

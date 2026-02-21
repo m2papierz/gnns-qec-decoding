@@ -20,23 +20,12 @@ from pathlib import Path
 from typing import Sequence
 
 from cli import setup_logging
-from gnn.eval import evaluate_all, print_report, save_report
+from gnn.evaluator import Evaluator
+from gnn.metrics import print_report
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """
-    Parse command-line arguments.
-
-    Parameters
-    ----------
-    argv : sequence of str or None
-        Arguments to parse; defaults to ``sys.argv[1:]``.
-
-    Returns
-    -------
-    argparse.Namespace
-        Parsed arguments.
-    """
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -94,21 +83,21 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     setup_logging(verbose=args.verbose)
 
-    report = evaluate_all(
+    evaluator = Evaluator(
         checkpoint=args.checkpoint,
         datasets_dir=args.datasets_dir,
         split=args.split,
         baseline_path=args.baseline,
         batch_size=args.batch_size,
     )
+    report = evaluator.run()
 
     print_report(report)
 
-    # Always save report: explicit path or default next to checkpoint
     output_path = args.output
     if output_path is None:
         output_path = args.checkpoint.parent / f"eval_{args.split}.json"
-    save_report(report, output_path)
+    report.save(output_path)
 
 
 if __name__ == "__main__":
