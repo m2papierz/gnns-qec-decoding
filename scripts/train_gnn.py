@@ -94,7 +94,13 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
         "--patience",
         type=int,
         default=None,
-        help="Early stopping patience in epochs (0 = disabled, default: 15)",
+        help="Early stopping patience in val rounds (0 = disabled, default: 15)",
+    )
+    parser.add_argument(
+        "--val-every",
+        type=int,
+        default=None,
+        help="Run validation every N epochs (default: 1)",
     )
 
     # Misc
@@ -138,6 +144,7 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
         "edge_pos_weight": args.edge_pos_weight,
         "max_grad_norm": args.max_grad_norm,
         "patience": args.patience,
+        "val_every": args.val_every,
         "seed": args.seed,
         "resume": args.resume,
         "max_samples": args.max_samples,

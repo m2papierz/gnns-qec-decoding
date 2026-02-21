@@ -69,8 +69,12 @@ class TrainConfig:
     max_grad_norm : float
         Maximum gradient norm for clipping.
     patience : int
-        Early stopping patience (epochs without improvement).
+        Early stopping patience (validation runs without improvement).
         Set to 0 to disable early stopping.
+    val_every : int
+        Run validation every this many epochs.  Early stopping patience
+        counts validation runs, so ``patience=25, val_every=5`` means
+        the model must improve within 125 epochs.
     seed : int
         Random seed for reproducibility.
     resume : Path or None
@@ -93,6 +97,7 @@ class TrainConfig:
     edge_pos_weight: float | None = None
     max_grad_norm: float = 1.0
     patience: int = 15
+    val_every: int = 1
     seed: int = 42
     resume: Path | None = None
     max_samples: int | None = None
@@ -112,6 +117,7 @@ class TrainConfig:
             "edge_pos_weight",
             "max_grad_norm",
             "patience",
+            "val_every",
             "seed",
             "max_samples",
         ):
@@ -133,6 +139,10 @@ class TrainConfig:
                 flat[key] = Path(flat[key])
 
         return cls(**flat)
+
+    def __post_init__(self) -> None:
+        if self.val_every < 1:
+            raise ValueError(f"val_every must be >= 1, got {self.val_every}")
 
 
 def seed_everything(seed: int) -> None:
@@ -294,8 +304,6 @@ def train_one_epoch(
     num_batches = 0
     total_graphs = 0
     total_errors = 0
-    edge_correct = 0
-    edge_total = 0
 
     for batch in loader:
         batch = batch.to(device)
@@ -316,16 +324,12 @@ def train_one_epoch(
         scaler.step(optimizer)
         scaler.update()
 
-        with torch.no_grad():
-            if case == "logical_head":
+        if case == "logical_head":
+            with torch.no_grad():
                 pred = (logits > 0.0).float()
                 target_2d = batch.y.view_as(pred)
                 total_graphs += pred.shape[0]
                 total_errors += int((pred != target_2d).any(dim=1).sum().item())
-            else:
-                pred = (logits > 0.0).float()
-                edge_correct += int((pred == batch.y).sum().item())
-                edge_total += int(batch.y.numel())
 
         total_loss += loss.item()
         num_batches += 1
@@ -334,8 +338,6 @@ def train_one_epoch(
 
     if case == "logical_head" and total_graphs > 0:
         metrics["ler"] = total_errors / total_graphs
-    if case != "logical_head" and edge_total > 0:
-        metrics["edge_acc"] = edge_correct / edge_total
 
     return metrics
 
@@ -608,7 +610,12 @@ def train(cfg: TrainConfig) -> Path:
     history: list[Dict[str, Any]] = []
     epochs_without_improvement = 0
 
-    logger.info("Starting training: %d epochs", cfg.epochs)
+    logger.info(
+        "Starting training: %d epochs (val_every=%d, effective patience=%d epochs)",
+        cfg.epochs,
+        cfg.val_every,
+        cfg.patience * cfg.val_every if cfg.patience > 0 else 0,
+    )
 
     for epoch in range(start_epoch, cfg.epochs):
         t0 = time.perf_counter()
@@ -624,65 +631,87 @@ def train(cfg: TrainConfig) -> Path:
             scaler=scaler,
         )
 
-        val_metrics = validate(
-            model=model,
-            loader=val_loader,
-            criterion=criterion,
-            device=device,
-            case=cfg.case,
-        )
-
         scheduler.step()
         elapsed = time.perf_counter() - t0
         lr = optimizer.param_groups[0]["lr"]
 
-        current = val_metrics[metric_key]
-        improved = current < best_metric
-        if improved:
-            best_metric = current
-            epochs_without_improvement = 0
-            save_checkpoint(
-                path=best_path,
+        is_last_epoch = (epoch + 1 == cfg.epochs)
+        do_validate = (epoch + 1) % cfg.val_every == 0 or is_last_epoch
+
+        if do_validate:
+            val_metrics = validate(
                 model=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                epoch=epoch,
-                best_metric=best_metric,
-                config=cfg,
+                loader=val_loader,
+                criterion=criterion,
+                device=device,
+                case=cfg.case,
             )
-        else:
-            epochs_without_improvement += 1
 
-        marker = " *" if improved else ""
-        logger.info(
-            "Epoch %3d/%d [%.1fs, lr=%.1e]  " "train: %s  val: %s%s",
-            epoch + 1,
-            cfg.epochs,
-            elapsed,
-            lr,
-            _format_metrics(train_metrics),
-            _format_metrics(val_metrics),
-            marker,
-        )
+            current = val_metrics[metric_key]
+            improved = current < best_metric
+            if improved:
+                best_metric = current
+                epochs_without_improvement = 0
+                save_checkpoint(
+                    path=best_path,
+                    model=model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    epoch=epoch,
+                    best_metric=best_metric,
+                    config=cfg,
+                )
+            else:
+                epochs_without_improvement += 1
 
-        history.append(
-            {
-                "epoch": epoch,
-                "lr": lr,
-                "elapsed_s": round(elapsed, 2),
-                "train": train_metrics,
-                "val": val_metrics,
-                "best": improved,
-            }
-        )
-
-        if cfg.patience > 0 and epochs_without_improvement >= cfg.patience:
+            marker = " *" if improved else ""
             logger.info(
-                "Early stopping at epoch %d (%d epochs without improvement)",
+                "Epoch %3d/%d [%.1fs, lr=%.1e]  train: %s  val: %s%s",
                 epoch + 1,
-                cfg.patience,
+                cfg.epochs,
+                elapsed,
+                lr,
+                _format_metrics(train_metrics),
+                _format_metrics(val_metrics),
+                marker,
             )
-            break
+
+            history.append(
+                {
+                    "epoch": epoch,
+                    "lr": lr,
+                    "elapsed_s": round(elapsed, 2),
+                    "train": train_metrics,
+                    "val": val_metrics,
+                    "best": improved,
+                }
+            )
+
+            if cfg.patience > 0 and epochs_without_improvement >= cfg.patience:
+                logger.info(
+                    "Early stopping at epoch %d (%d val rounds without improvement)",
+                    epoch + 1,
+                    cfg.patience,
+                )
+                break
+        else:
+            logger.info(
+                "Epoch %3d/%d [%.1fs, lr=%.1e]  train: %s",
+                epoch + 1,
+                cfg.epochs,
+                elapsed,
+                lr,
+                _format_metrics(train_metrics),
+            )
+
+            history.append(
+                {
+                    "epoch": epoch,
+                    "lr": lr,
+                    "elapsed_s": round(elapsed, 2),
+                    "train": train_metrics,
+                }
+            )
 
     # ── Save history ──────────────────────────────────────────────
 

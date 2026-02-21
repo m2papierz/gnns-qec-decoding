@@ -9,15 +9,15 @@ An end-to-end project on decoding topological quantum error-correcting codes wit
 > - [x] Dataset generation pipeline (raw + processed)
 > - [x] MWPM baseline evaluation + sanity checks
 > - [x] GNN `logical_head` training & evaluation (research-grade, not yet optimized)
-> - [x] GNN `mwpm_teacher` training (research-grade, not yet optimized)
-> - [x] GNN `hybrid` training (research-grade, not yet optimized)
+> - [x] GNN `mwpm_teacher` training & evaluation (research-grade, not yet optimized)
+> - [x] GNN `hybrid` training & evaluation (research-grade, not yet optimized)
 >
 > ### In progress / experimental
 > - [ ] TensorRT deployment path (ONNX export + TRT engine build) for low-latency inference
 > - [ ] Custom CUDA **tiled kernels** for hot paths (e.g., syndrome => features, message aggregation)
 > - [ ] GNN `logical_head` mode hardening
-> - [ ] GNN `mwpm_teacher` evaluation + hardening
-> - [ ] GNN `hybrid` evaluation + hardening
+> - [ ] GNN `mwpm_teacher` mode hardening
+> - [ ] GNN `hybrid` mode hardening
 >
 > ### Benchmarks (planned)
 > - [ ] LER curves vs **(p, d, r)** + threshold estimate
