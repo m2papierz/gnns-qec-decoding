@@ -1,5 +1,4 @@
-"""
-Train a GNN-based QEC decoder.
+"""Train a GNN-based QEC decoder.
 
 Examples
 --------
@@ -8,9 +7,6 @@ Examples
 
     # Override case and epochs
     uv run scripts/train_gnn.py -c configs/train.yaml --case mwpm_teacher --epochs 50
-
-    # Pure CLI (no config file)
-    uv run scripts/train_gnn.py --case logical_head --hidden-dim 64 --epochs 50
 
     # Resume from checkpoint
     uv run scripts/train_gnn.py -c configs/train.yaml --resume outputs/runs/logical_head/best.pt
@@ -23,23 +19,14 @@ from pathlib import Path
 from typing import Sequence
 
 from cli import setup_logging
-from gnn.train import TrainConfig
-from gnn.trainer import Trainer
+from gnn.trainer import Trainer, TrainConfig
 
 
 def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
     """
     Parse command-line arguments into a :class:`TrainConfig`.
 
-    Parameters
-    ----------
-    argv : sequence of str or None
-        Arguments to parse; defaults to ``sys.argv[1:]``.
-
-    Returns
-    -------
-    TrainConfig
-        Parsed training configuration.
+    CLI args override values loaded from YAML config.
     """
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -47,49 +34,27 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
     )
 
     parser.add_argument(
-        "-c",
-        "--config",
-        type=Path,
-        default=Path("configs/train.yaml"),
+        "-c", "--config", type=Path, default=Path("configs/train.yaml"),
         help="YAML config file (CLI args override config values)",
     )
     parser.add_argument(
-        "--case",
-        type=str,
+        "--case", type=str, default=None,
         choices=["logical_head", "mwpm_teacher", "hybrid"],
-        default=None,
     )
     parser.add_argument("--datasets-dir", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
-
-    # Model
     parser.add_argument("--hidden-dim", type=int, default=None)
     parser.add_argument("--num-layers", type=int, default=None)
     parser.add_argument("--dropout", type=float, default=None)
-
-    # Optimisation
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--weight-decay", type=float, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
-
-    # Data loading
     parser.add_argument("--num-workers", type=int, default=None)
-
-    # Edge-case specific
-    parser.add_argument(
-        "--edge-pos-weight",
-        type=float,
-        default=None,
-        help="pos_weight for edge BCE (auto-estimated if omitted)",
-    )
-
-    # Robustness
+    parser.add_argument("--edge-pos-weight", type=float, default=None)
     parser.add_argument("--max-grad-norm", type=float, default=None)
     parser.add_argument("--patience", type=int, default=None)
     parser.add_argument("--val-every", type=int, default=None)
-
-    # Misc
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument("--max-samples", type=int, default=None)
@@ -98,18 +63,16 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
     args = parser.parse_args(argv)
     setup_logging(verbose=args.verbose)
 
-    # Start from YAML if provided/exists, else from defaults
     if args.config is not None and args.config.is_file():
         cfg = TrainConfig.from_yaml(args.config)
     elif args.config is not None and not args.config.is_file():
         logging.getLogger(__name__).warning(
-            "Config file %s not found, using defaults", args.config
+            "Config file %s not found, using defaults", args.config,
         )
         cfg = TrainConfig()
     else:
         cfg = TrainConfig()
 
-    # CLI overrides (only non-None values)
     overrides = {
         "case": args.case,
         "datasets_dir": args.datasets_dir,
@@ -147,8 +110,7 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
 def main(argv: Sequence[str] | None = None) -> None:
     """Entry point for GNN training."""
     cfg = parse_args(argv)
-    trainer = Trainer(cfg)
-    trainer.fit()
+    Trainer(cfg).fit()
 
 
 if __name__ == "__main__":

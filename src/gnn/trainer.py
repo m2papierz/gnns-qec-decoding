@@ -2,36 +2,147 @@
 Trainer for GNN-based QEC decoders.
 
 Encapsulates training state (model, optimizer, scheduler, criterion) and
-provides a clean ``fit()`` entry point.  Keeps epoch-level logic in small
-methods that are easy to test and override.
+provides a clean ``fit()`` entry point.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import random
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import yaml
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch_geometric.data import Batch
 from torch_geometric.loader import DataLoader
 
+from constants import Case
 from gnn.dataset import MixedSurfaceCodeDataset
-from gnn.models.heads import Case, QECDecoder, build_model
-from gnn.train import TrainConfig, seed_everything
+from gnn.models.heads import QECDecoder, build_model
 
 
 logger = logging.getLogger(__name__)
 
 
-class GraphNormalizedBCE(nn.Module):
+@dataclass
+class TrainConfig:
+    """
+    Training hyperparameters.
+
+    Attributes
+    ----------
+    case : str
+        Training case: ``"logical_head"``, ``"mwpm_teacher"``, or ``"hybrid"``.
+    datasets_dir : Path
+        Root directory of packaged datasets.
+    output_dir : Path
+        Directory for checkpoints and logs.
+    hidden_dim : int
+        Encoder hidden dimensionality.
+    num_layers : int
+        Number of message-passing layers.
+    dropout : float
+        Dropout probability.
+    lr : float
+        Peak learning rate (after warmup).
+    weight_decay : float
+        AdamW weight decay.
+    epochs : int
+        Number of training epochs.
+    batch_size : int
+        Graphs per training batch.
+    num_workers : int
+        DataLoader worker processes.
+    edge_pos_weight : float or None
+        Positive-class weight for edge BCE loss.  If None, estimated
+        from training data.
+    max_grad_norm : float
+        Maximum gradient norm for clipping.
+    patience : int
+        Early stopping patience (validation runs without improvement).
+        Set to 0 to disable early stopping.
+    val_every : int
+        Run validation every this many epochs.
+    seed : int
+        Random seed for reproducibility.
+    resume : Path or None
+        Path to checkpoint to resume from.
+    max_samples : int or None
+        Cap on training samples (validation capped at ``max_samples // 5``).
+    """
+
+    case: Case = "logical_head"
+    datasets_dir: Path = Path("data/datasets")
+    output_dir: Path = Path("outputs/runs")
+    hidden_dim: int = 64
+    num_layers: int = 4
+    dropout: float = 0.1
+    lr: float = 1e-3
+    weight_decay: float = 1e-4
+    epochs: int = 100
+    batch_size: int = 64
+    num_workers: int = 4
+    edge_pos_weight: float | None = None
+    max_grad_norm: float = 1.0
+    patience: int = 15
+    val_every: int = 1
+    seed: int = 42
+    resume: Path | None = None
+    max_samples: int | None = None
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "TrainConfig":
+        """Load configuration from a YAML file."""
+        raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+
+        flat: Dict[str, Any] = {}
+
+        for key in (
+            "case", "datasets_dir", "output_dir", "num_workers",
+            "edge_pos_weight", "max_grad_norm", "patience", "val_every",
+            "seed", "max_samples",
+        ):
+            if key in raw:
+                flat[key] = raw[key]
+
+        for key in ("hidden_dim", "num_layers", "dropout"):
+            if key in raw.get("model", {}):
+                flat[key] = raw["model"][key]
+
+        for key in ("lr", "weight_decay", "epochs", "batch_size"):
+            if key in raw.get("optimisation", {}):
+                flat[key] = raw["optimisation"][key]
+
+        for key in ("datasets_dir", "output_dir"):
+            if key in flat:
+                flat[key] = Path(flat[key])
+
+        return cls(**flat)
+
+    def __post_init__(self) -> None:
+        if self.val_every < 1:
+            raise ValueError(f"val_every must be >= 1, got {self.val_every}")
+
+
+def seed_everything(seed: int) -> None:
+    """Set random seeds for Python, NumPy, and PyTorch."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+class _GraphNormalizedBCE(nn.Module):
     """
     Per-graph normalized BCE with logits for edge predictions.
 
@@ -65,7 +176,7 @@ class GraphNormalizedBCE(nn.Module):
         return (graph_loss / graph_count.clamp(min=1)).mean()
 
 
-def build_criterion(
+def _build_criterion(
     case: Case,
     pos_weight: float | None = None,
     device: torch.device | None = None,
@@ -78,10 +189,10 @@ def build_criterion(
         if pos_weight is not None
         else None
     )
-    return GraphNormalizedBCE(pos_weight=pw)
+    return _GraphNormalizedBCE(pos_weight=pw)
 
 
-def estimate_edge_pos_weight(
+def _estimate_edge_pos_weight(
     loader: DataLoader,
     max_batches: int = 50,
 ) -> float:
@@ -90,18 +201,15 @@ def estimate_edge_pos_weight(
 
     Returns ``num_neg / num_pos``, clamped to ``[1.0, 200.0]``.
     """
-    import numpy as np
-
     total_pos = 0
     total_neg = 0
 
     for i, batch in enumerate(loader):
         if i >= max_batches:
             break
-        labels = batch.y
-        pos = int(labels.sum().item())
+        pos = int(batch.y.sum().item())
         total_pos += pos
-        total_neg += int(labels.numel()) - pos
+        total_neg += int(batch.y.numel()) - pos
 
     if total_pos == 0:
         logger.warning("No positive edge labels found; using pos_weight=10.0")
@@ -111,10 +219,7 @@ def estimate_edge_pos_weight(
     clamped = float(np.clip(raw, 1.0, 200.0))
     logger.info(
         "Edge label balance: %d pos / %d neg → raw=%.1f, pos_weight=%.1f",
-        total_pos,
-        total_neg,
-        raw,
-        clamped,
+        total_pos, total_neg, raw, clamped,
     )
     return clamped
 
@@ -127,6 +232,11 @@ class Trainer:
     ----------
     cfg : TrainConfig
         Full training configuration.
+
+    Example
+    -------
+    >>> trainer = Trainer(cfg)
+    >>> best_path = trainer.fit()
     """
 
     def __init__(self, cfg: TrainConfig) -> None:
@@ -155,8 +265,7 @@ class Trainer:
         """Load datasets and build data loaders."""
         logger.info(
             "Loading datasets from %s (case=%s)",
-            self.cfg.datasets_dir,
-            self.cfg.case,
+            self.cfg.datasets_dir, self.cfg.case,
         )
         train_ds = MixedSurfaceCodeDataset(
             datasets_dir=self.cfg.datasets_dir,
@@ -200,8 +309,7 @@ class Trainer:
         )
         logger.info(
             "Train: %d samples, Val: %d samples",
-            len(train_ds),
-            len(val_ds),
+            len(train_ds), len(val_ds),
         )
 
     def _setup_model(self) -> None:
@@ -229,7 +337,7 @@ class Trainer:
         eta_min = self.cfg.lr / 50
         warmup_epochs = max(1, self.cfg.epochs // 20)
         warmup = LinearLR(
-            self.optimizer, start_factor=0.01, total_iters=warmup_epochs
+            self.optimizer, start_factor=0.01, total_iters=warmup_epochs,
         )
         cosine = CosineAnnealingLR(
             self.optimizer,
@@ -243,25 +351,23 @@ class Trainer:
         )
         logger.info(
             "Scheduler: LinearWarmup(%dep) → CosineAnnealing(T_max=%d, eta_min=%.1e)",
-            warmup_epochs,
-            self.cfg.epochs - warmup_epochs,
-            eta_min,
+            warmup_epochs, self.cfg.epochs - warmup_epochs, eta_min,
         )
 
     def _setup_criterion(self) -> None:
         """Build loss function, estimating pos_weight if needed."""
         pos_weight = self.cfg.edge_pos_weight
         if self.cfg.case != "logical_head" and pos_weight is None:
-            pos_weight = estimate_edge_pos_weight(self.train_loader)
+            pos_weight = _estimate_edge_pos_weight(self.train_loader)
 
-        self.criterion = build_criterion(
-            self.cfg.case, pos_weight=pos_weight, device=self.device
+        self.criterion = _build_criterion(
+            self.cfg.case, pos_weight=pos_weight, device=self.device,
         )
 
     def _setup_amp(self) -> None:
         """Configure automatic mixed precision."""
         self.scaler = torch.amp.GradScaler(
-            enabled=(self.device.type == "cuda")
+            enabled=(self.device.type == "cuda"),
         )
         if self.scaler.is_enabled():
             logger.info("Mixed precision training enabled (AMP)")
@@ -279,7 +385,6 @@ class Trainer:
         if "scheduler_state_dict" in ckpt:
             self.scheduler.load_state_dict(ckpt["scheduler_state_dict"])  # type: ignore[attr-defined]
 
-        # Validate architecture match
         ckpt_cfg = ckpt.get("config", {})
         for key in ("case", "hidden_dim", "num_layers"):
             current = getattr(self.cfg, key)
@@ -294,8 +399,7 @@ class Trainer:
         self.best_metric = ckpt.get("best_metric", float("inf"))
         logger.info(
             "Resuming from epoch %d (best_metric=%.6f)",
-            self.start_epoch,
-            self.best_metric,
+            self.start_epoch, self.best_metric,
         )
 
     def _save_config(self) -> None:
@@ -305,13 +409,12 @@ class Trainer:
         config_dict["output_dir"] = str(self.cfg.output_dir)
         config_dict["resume"] = str(self.cfg.resume) if self.cfg.resume else None
 
-        config_path = self._run_dir / "config.json"
-        config_path.write_text(
-            json.dumps(config_dict, indent=2), encoding="utf-8"
-        )
+        path = self._run_dir / "config.json"
+        path.write_text(json.dumps(config_dict, indent=2), encoding="utf-8")
 
     def train_epoch(self) -> Dict[str, float]:
-        """Run one training epoch.
+        """
+        Run one training epoch.
 
         Returns
         -------
@@ -331,8 +434,7 @@ class Trainer:
             self.optimizer.zero_grad()
 
             with torch.amp.autocast(
-                device_type=self.device.type,
-                enabled=use_amp,
+                device_type=self.device.type, enabled=use_amp,
             ):
                 logits = self.model(batch)
                 if self.cfg.case == "logical_head":
@@ -343,7 +445,7 @@ class Trainer:
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.cfg.max_grad_norm
+                self.model.parameters(), self.cfg.max_grad_norm,
             )
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -361,7 +463,7 @@ class Trainer:
             num_batches += 1
 
         metrics: Dict[str, float] = {
-            "loss": total_loss / max(num_batches, 1)
+            "loss": total_loss / max(num_batches, 1),
         }
         if self.cfg.case == "logical_head" and total_graphs > 0:
             metrics["ler"] = total_errors / total_graphs
@@ -392,8 +494,7 @@ class Trainer:
             batch = batch.to(self.device)
 
             with torch.amp.autocast(
-                device_type=self.device.type,
-                enabled=use_amp,
+                device_type=self.device.type, enabled=use_amp,
             ):
                 logits = self.model(batch)
                 if self.cfg.case == "logical_head":
@@ -417,7 +518,7 @@ class Trainer:
             num_batches += 1
 
         metrics: Dict[str, float] = {
-            "loss": total_loss / max(num_batches, 1)
+            "loss": total_loss / max(num_batches, 1),
         }
         if self.cfg.case == "logical_head" and total_graphs > 0:
             metrics["ler"] = total_errors / total_graphs
@@ -426,12 +527,7 @@ class Trainer:
 
         return metrics
 
-    def save_checkpoint(
-        self,
-        path: Path,
-        epoch: int,
-        best_metric: float,
-    ) -> None:
+    def save_checkpoint(self, path: Path, epoch: int, best_metric: float) -> None:
         """Save a training checkpoint."""
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(
@@ -450,9 +546,6 @@ class Trainer:
     def fit(self) -> Path:
         """
         Execute the full training pipeline.
-
-        Sets up data, model, optimizer, and runs the training loop
-        with validation and early stopping.
 
         Returns
         -------
@@ -479,9 +572,7 @@ class Trainer:
 
         logger.info(
             "Starting training: %d epochs (val_every=%d, patience=%d)",
-            self.cfg.epochs,
-            self.cfg.val_every,
-            self.cfg.patience,
+            self.cfg.epochs, self.cfg.val_every, self.cfg.patience,
         )
 
         for epoch in range(self.start_epoch, self.cfg.epochs):
@@ -493,7 +584,7 @@ class Trainer:
             elapsed = time.perf_counter() - t0
             lr = self.optimizer.param_groups[0]["lr"]
 
-            is_last = (epoch + 1 == self.cfg.epochs)
+            is_last = epoch + 1 == self.cfg.epochs
             do_validate = (epoch + 1) % self.cfg.val_every == 0 or is_last
 
             if do_validate:
@@ -505,71 +596,57 @@ class Trainer:
                     self.best_metric = current
                     epochs_without_improvement = 0
                     self.save_checkpoint(
-                        self._best_path, epoch, self.best_metric
+                        self._best_path, epoch, self.best_metric,
                     )
                 else:
                     epochs_without_improvement += 1
 
                 logger.info(
                     "Epoch %3d/%d [%.1fs, lr=%.1e]  train: %s  val: %s%s",
-                    epoch + 1,
-                    self.cfg.epochs,
-                    elapsed,
-                    lr,
+                    epoch + 1, self.cfg.epochs, elapsed, lr,
                     _format_metrics(train_metrics),
                     _format_metrics(val_metrics),
                     " *" if improved else "",
                 )
-                self.history.append(
-                    {
-                        "epoch": epoch,
-                        "lr": lr,
-                        "elapsed_s": round(elapsed, 2),
-                        "train": train_metrics,
-                        "val": val_metrics,
-                        "best": improved,
-                    }
-                )
+                self.history.append({
+                    "epoch": epoch, "lr": lr,
+                    "elapsed_s": round(elapsed, 2),
+                    "train": train_metrics, "val": val_metrics,
+                    "best": improved,
+                })
 
                 if (
                     self.cfg.patience > 0
                     and epochs_without_improvement >= self.cfg.patience
                 ):
                     logger.info(
-                        "Early stopping at epoch %d (%d val rounds without improvement)",
-                        epoch + 1,
-                        self.cfg.patience,
+                        "Early stopping at epoch %d (%d val rounds w/o improvement)",
+                        epoch + 1, self.cfg.patience,
                     )
                     break
             else:
                 logger.info(
                     "Epoch %3d/%d [%.1fs, lr=%.1e]  train: %s",
-                    epoch + 1,
-                    self.cfg.epochs,
-                    elapsed,
-                    lr,
+                    epoch + 1, self.cfg.epochs, elapsed, lr,
                     _format_metrics(train_metrics),
                 )
-                self.history.append(
-                    {
-                        "epoch": epoch,
-                        "lr": lr,
-                        "elapsed_s": round(elapsed, 2),
-                        "train": train_metrics,
-                    }
-                )
+                self.history.append({
+                    "epoch": epoch, "lr": lr,
+                    "elapsed_s": round(elapsed, 2),
+                    "train": train_metrics,
+                })
 
-        # Save training history
         history_path = self._run_dir / "history.json"
         history_path.write_text(
-            json.dumps(self.history, indent=2), encoding="utf-8"
+            json.dumps(self.history, indent=2), encoding="utf-8",
         )
         logger.info(
-            "Training complete. Best %s=%.6f", metric_key, self.best_metric
+            "Training complete. Best %s=%.6f", metric_key, self.best_metric,
         )
         logger.info("Best checkpoint: %s", self._best_path)
 
         return self._best_path
+
 
 def _validate_dataset(ds: MixedSurfaceCodeDataset, label: str) -> None:
     """Smoke-test dataset by loading first sample; raises on bad shapes."""
@@ -590,21 +667,12 @@ def _validate_dataset(ds: MixedSurfaceCodeDataset, label: str) -> None:
         )
     if sample.y.ndim < 1:
         raise ValueError(f"{label} dataset: y is scalar, expected ≥1D")
-    logger.debug(
-        "%s dataset validated: x=%s, edges=%d, y=%s",
-        label,
-        tuple(sample.x.shape),
-        sample.edge_index.shape[1],
-        tuple(sample.y.shape),
-    )
 
 
 def _format_metrics(metrics: Dict[str, float]) -> str:
     parts = []
     for k, v in metrics.items():
-        if k == "loss":
-            parts.append(f"loss={v:.4f}")
-        elif k == "ler":
+        if k == "ler":
             parts.append(f"LER={v:.4f}")
         elif k == "edge_acc":
             parts.append(f"edge_acc={v:.4f}")
