@@ -485,7 +485,8 @@ class Trainer:
         Returns
         -------
         dict
-            Validation metrics (``loss``, optionally ``ler`` or ``edge_acc``).
+            Validation metrics: ``loss`` always; ``ler`` for logical_head;
+            ``edge_auc`` for edge cases.
         """
         self.model.eval()
         use_amp = self.device.type == "cuda"
@@ -494,8 +495,8 @@ class Trainer:
         num_batches = 0
         total_graphs = 0
         total_errors = 0
-        edge_correct = 0
-        edge_total = 0
+        all_logits: list[np.ndarray] = []
+        all_targets: list[np.ndarray] = []
 
         for batch in self.val_loader:
             batch = batch.to(self.device)
@@ -516,9 +517,8 @@ class Trainer:
                 total_graphs += pred.shape[0]
                 total_errors += int((pred != target_2d).any(dim=1).sum().item())
             else:
-                pred = (logits > 0.0).float()
-                edge_correct += int((pred == batch.y).sum().item())
-                edge_total += int(batch.y.numel())
+                all_logits.append(logits.cpu().numpy())
+                all_targets.append(batch.y.cpu().numpy())
 
             total_loss += loss.item()
             num_batches += 1
@@ -528,8 +528,10 @@ class Trainer:
         }
         if self.cfg.case == "logical_head" and total_graphs > 0:
             metrics["ler"] = total_errors / total_graphs
-        if self.cfg.case != "logical_head" and edge_total > 0:
-            metrics["edge_acc"] = edge_correct / edge_total
+        if self.cfg.case != "logical_head" and all_logits:
+            scores = np.concatenate(all_logits)
+            targets = np.concatenate(all_targets)
+            metrics["edge_auc"] = _roc_auc_score(targets, scores)
 
         return metrics
 
@@ -573,7 +575,10 @@ class Trainer:
         self._maybe_resume()
         self._save_config()
 
-        metric_key = "ler" if self.cfg.case == "logical_head" else "loss"
+        metric_key = "ler" if self.cfg.case == "logical_head" else "edge_auc"
+        maximize = self.cfg.case != "logical_head"
+        if self.cfg.resume is None and maximize:
+            self.best_metric = float("-inf")
         epochs_without_improvement = 0
 
         logger.info(
@@ -598,7 +603,11 @@ class Trainer:
             if do_validate:
                 val_metrics = self.validate()
                 current = val_metrics[metric_key]
-                improved = current < self.best_metric
+                improved = (
+                    current > self.best_metric
+                    if maximize
+                    else current < self.best_metric
+                )
 
                 if improved:
                     self.best_metric = current
@@ -675,6 +684,42 @@ class Trainer:
         return self._best_path
 
 
+def _roc_auc_score(targets: np.ndarray, scores: np.ndarray) -> float:
+    """
+    Compute ROC AUC from binary targets and continuous scores.
+
+    Uses the Mann-Whitney U statistic which handles tied scores
+    correctly. Returns 0.5 if only one class is present.
+    """
+    pos_mask = targets == 1
+    num_pos = int(pos_mask.sum())
+    num_neg = len(targets) - num_pos
+
+    if num_pos == 0 or num_neg == 0:
+        return 0.5
+
+    # Average ranks (1-based), ties get mean rank
+    order = np.argsort(scores)
+    ranks = np.empty_like(order, dtype=np.float64)
+    ranks[order] = np.arange(1, len(scores) + 1, dtype=np.float64)
+
+    # Adjust for ties: groups of equal scores share the mean rank
+    sorted_scores = scores[order]
+    i = 0
+    while i < len(sorted_scores):
+        j = i + 1
+        while j < len(sorted_scores) and sorted_scores[j] == sorted_scores[i]:
+            j += 1
+        if j > i + 1:
+            mean_rank = (i + 1 + j) / 2.0
+            ranks[order[i:j]] = mean_rank
+        i = j
+
+    rank_sum = ranks[pos_mask].sum()
+    u = rank_sum - num_pos * (num_pos + 1) / 2.0
+    return float(u / (num_pos * num_neg))
+
+
 def _validate_dataset(ds: MixedSurfaceCodeDataset, label: str) -> None:
     """Smoke-test dataset by loading first sample; raises on bad shapes."""
     sample = ds[0]
@@ -701,8 +746,8 @@ def _format_metrics(metrics: Dict[str, float]) -> str:
     for k, v in metrics.items():
         if k == "ler":
             parts.append(f"LER={v:.4f}")
-        elif k == "edge_acc":
-            parts.append(f"edge_acc={v:.4f}")
+        elif k == "edge_auc":
+            parts.append(f"AUC={v:.4f}")
         else:
             parts.append(f"{k}={v:.4f}")
     return "  ".join(parts)
