@@ -76,7 +76,6 @@ Quick start:
 
 Code formatting/linting:
 ```bash
-uv run ruff check --fix .
 uv run isort .
 uv run black .
 ```
