@@ -575,10 +575,7 @@ class Trainer:
         self._maybe_resume()
         self._save_config()
 
-        metric_key = "ler" if self.cfg.case == "logical_head" else "edge_auc"
-        maximize = self.cfg.case != "logical_head"
-        if self.cfg.resume is None and maximize:
-            self.best_metric = float("-inf")
+        metric_key = "ler" if self.cfg.case == "logical_head" else "loss"
         epochs_without_improvement = 0
 
         logger.info(
@@ -603,11 +600,7 @@ class Trainer:
             if do_validate:
                 val_metrics = self.validate()
                 current = val_metrics[metric_key]
-                improved = (
-                    current > self.best_metric
-                    if maximize
-                    else current < self.best_metric
-                )
+                improved = current < self.best_metric
 
                 if improved:
                     self.best_metric = current

@@ -19,7 +19,7 @@ optimisation:
   lr: 1.0e-4
   weight_decay: 1.0e-5
   epochs: 500
-  batch_size: 32
+  batch_size: 256
 
 # Data loading
 num_workers: 4
@@ -37,8 +37,8 @@ max_grad_norm: 1.0
 # Early stopping: patience counts validation runs, not epochs.
 # With val_every: 5 and patience: 25, the model must improve within 125 epochs.
 # Set patience to 0 to disable early stopping.
-patience: 25
-val_every: 5
+patience: 0
+val_every: 1
 
 # Reproducibility
 seed: 42
