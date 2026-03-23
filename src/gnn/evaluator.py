@@ -4,10 +4,11 @@ Evaluator for trained GNN decoders.
 Computes per-setting logical error rates (LER) for a trained checkpoint,
 with optional comparison against MWPM baseline results.
 
-Three evaluation protocols match the three training cases:
+Evaluation protocols by training case:
+
 - ``logical_head``: threshold graph-level logits at 0 => observable flip.
-- ``mwpm_teacher`` / ``hybrid``: convert per-edge logits to MWPM
-  weights => decode with PyMatching => LER.
+- ``mwpm_teacher`` / ``hybrid`` / ``tn_teacher``: convert per-edge logits
+  to decoder weights => decode with pluggable decoder => LER.
 """
 
 from __future__ import annotations
@@ -19,62 +20,18 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
-import pymatching
 import torch
 from torch_geometric.data import Batch
 from tqdm import tqdm
 
+from decoders.base import BaseDecoder, DecoderConfig
+from decoders.mwpm import MWPMDecoder
 from gnn.metrics import EvalReport, SettingResult
 from gnn.models.heads import Case, QECDecoder, build_model
 from qec_generator.utils import read_json, undirected_edges
 
 
 logger = logging.getLogger(__name__)
-
-
-def _logits_to_weights(logits: np.ndarray) -> np.ndarray:
-    """Logit => sigmoid => log-likelihood ratio, clamped positive."""
-    prob = 1.0 / (1.0 + np.exp(-logits))
-    prob = np.clip(prob, 1e-7, 1.0 - 1e-7)
-    weights = np.log((1.0 - prob) / prob)
-    return np.maximum(weights, 1e-8)
-
-
-def _directed_to_undirected_logits(
-    directed_logits: np.ndarray,
-    dir_to_undir: np.ndarray,
-    num_undirected: int,
-) -> np.ndarray:
-    """Average directed edge logits into per-undirected-edge means."""
-    logit_sum = np.zeros(num_undirected, dtype=np.float64)
-    logit_count = np.zeros(num_undirected, dtype=np.int32)
-    np.add.at(logit_sum, dir_to_undir, directed_logits)
-    np.add.at(logit_count, dir_to_undir, 1)
-    return logit_sum / np.maximum(logit_count, 1)
-
-
-def _build_matching_from_weights(
-    und_pairs: np.ndarray,
-    weights: np.ndarray,
-    num_detectors: int,
-    has_boundary: bool,
-) -> pymatching.Matching:
-    """Build PyMatching decoder from predicted undirected edge weights."""
-    boundary_node = num_detectors if has_boundary else None
-    m = pymatching.Matching()
-
-    for eid in range(und_pairs.shape[0]):
-        u, v = int(und_pairs[eid, 0]), int(und_pairs[eid, 1])
-        w = float(max(weights[eid], 1e-8))
-
-        if boundary_node is not None and boundary_node in (u, v):
-            det = v if u == boundary_node else u
-            if 0 <= det < num_detectors:
-                m.add_boundary_edge(det, weight=w)
-        elif u < num_detectors and v < num_detectors:
-            m.add_edge(u, v, weight=w)
-
-    return m
 
 
 @dataclass(frozen=True)
@@ -104,6 +61,8 @@ class Evaluator:
         Root datasets directory.
     split : str
         Data split to evaluate.
+    decoder_type : str
+        Decoder to use for edge-based cases: ``"mwpm"`` (default).
     baseline_path : Path or None
         Path to MWPM baseline JSON report for comparison.
     batch_size : int
@@ -115,12 +74,14 @@ class Evaluator:
         checkpoint: Path,
         datasets_dir: Path,
         split: str = "test",
+        decoder_type: str = "mwpm",
         baseline_path: Path | None = None,
         batch_size: int = 256,
     ) -> None:
         self.checkpoint = checkpoint
         self.datasets_dir = datasets_dir
         self.split = split
+        self.decoder_type = decoder_type
         self.baseline_path = baseline_path
         self.batch_size = batch_size
 
@@ -155,6 +116,49 @@ class Evaluator:
             ckpt.get("epoch", -1),
         )
         return model, cfg
+
+    def _make_decoder(
+        self,
+        meta: _SettingMeta,
+        und_pairs: np.ndarray,
+        directed_logits: np.ndarray,
+        dir_to_undir: np.ndarray,
+        num_undirected: int,
+    ) -> BaseDecoder:
+        """Build a decoder from GNN edge logits for a single graph.
+
+        Parameters
+        ----------
+        meta : _SettingMeta
+            Setting metadata (detectors, observables, boundary).
+        und_pairs : ndarray, shape ``(U, 2)``
+            Undirected edge endpoints.
+        directed_logits : ndarray, shape ``(E,)``
+            Raw logits from the GNN edge head.
+        dir_to_undir : ndarray, shape ``(E,)``
+            Directed-to-undirected edge mapping.
+        num_undirected : int
+            Number of unique undirected edges.
+
+        Returns
+        -------
+        BaseDecoder
+        """
+        config = DecoderConfig(
+            num_detectors=meta.num_detectors,
+            num_observables=meta.num_observables,
+            has_boundary=meta.has_boundary,
+            boundary_node=meta.num_detectors if meta.has_boundary else None,
+        )
+        if self.decoder_type == "mwpm":
+            return MWPMDecoder.from_gnn_logits(
+                config,
+                und_pairs,
+                directed_logits,
+                dir_to_undir,
+                num_undirected,
+            )
+        raise ValueError(f"Unknown decoder type: {self.decoder_type!r}")
 
     def _load_settings(self) -> List[_SettingMeta]:
         """Load setting metadata from settings.json."""
@@ -288,19 +292,16 @@ class Evaluator:
         edge_index_np: np.ndarray,
         syndrome: np.ndarray,
         logical: np.ndarray,
-        num_nodes: int,
-        num_detectors: int,
-        has_boundary: bool,
-        num_observables: int,
+        meta: _SettingMeta,
     ) -> tuple[int, int, float]:
-        """Evaluate edge case: per-shot GNN weights => PyMatching => LER."""
+        """Evaluate edge case: per-shot GNN weights => decoder => LER."""
         n = syndrome.shape[0]
         edges_per_graph = edge_index_np.shape[1]
         und_pairs, dir_to_undir = undirected_edges(edge_index_np)
         num_und = und_pairs.shape[0]
 
-        predicted = np.empty((n, num_observables), dtype=np.uint8)
-        matching_cache: Dict[bytes, pymatching.Matching] = {}
+        predicted = np.empty((n, meta.num_observables), dtype=np.uint8)
+        decoder_cache: Dict[bytes, BaseDecoder] = {}
 
         for off in range(0, n, self.batch_size):
             end = min(off + self.batch_size, n)
@@ -308,8 +309,8 @@ class Evaluator:
                 syndrome,
                 edge_index,
                 edge_attr,
-                num_nodes,
-                num_detectors,
+                meta.num_nodes,
+                meta.num_detectors,
                 off,
                 end,
             ).to(self.device)
@@ -320,24 +321,17 @@ class Evaluator:
                 start_e = g * edges_per_graph
                 graph_logits = logits_np[start_e : start_e + edges_per_graph]
 
-                und_logits = _directed_to_undirected_logits(
-                    graph_logits,
-                    dir_to_undir,
-                    num_und,
-                )
-                weights = _logits_to_weights(und_logits)
-
-                cache_key = weights.tobytes()
-                if cache_key not in matching_cache:
-                    matching_cache[cache_key] = _build_matching_from_weights(
+                cache_key = graph_logits.tobytes()
+                if cache_key not in decoder_cache:
+                    decoder_cache[cache_key] = self._make_decoder(
+                        meta,
                         und_pairs,
-                        weights,
-                        num_detectors,
-                        has_boundary,
+                        graph_logits,
+                        dir_to_undir,
+                        num_und,
                     )
 
-                pred = matching_cache[cache_key].decode(syndrome[off + g])
-                predicted[off + g] = pred[:num_observables]
+                predicted[off + g] = decoder_cache[cache_key].decode(syndrome[off + g])
 
         shot_errors = np.any(predicted != logical, axis=1)
         return n, int(shot_errors.sum()), float("nan")
@@ -406,10 +400,7 @@ class Evaluator:
                     ei_np,
                     syndrome,
                     logical,
-                    meta.num_nodes,
-                    meta.num_detectors,
-                    meta.has_boundary,
-                    meta.num_observables,
+                    meta,
                 )
 
             elapsed = time.perf_counter() - t0
