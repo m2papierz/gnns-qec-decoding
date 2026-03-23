@@ -103,12 +103,23 @@ class TestMWPMDecoder:
         assert result.shape == (1,)
 
 
-class TestTNDecoder:
-    """Tests for TNDecoder.
+def _gpu_available() -> bool:
+    """Check if cupy + CUDA GPU is available."""
+    try:
+        import cupy as cp
 
-    The heuristic marginal path is pure NumPy and always available.
-    Exact TN contraction via cuTensorNet is lazily initialised.
-    """
+        cp.cuda.runtime.getDeviceCount()
+        return True
+    except Exception:
+        return False
+
+
+_skip_no_gpu = pytest.mark.skipif(not _gpu_available(), reason="no CUDA GPU")
+
+
+@_skip_no_gpu
+class TestTNDecoder:
+    """Tests for TNDecoder (requires GPU for cuTensorNet contraction)."""
 
     def test_decode_shape(self, simple_config: DecoderConfig) -> None:
         from decoders.tensor_network import TNDecoder
@@ -140,25 +151,6 @@ class TestTNDecoder:
         assert labels.dtype == np.float32
         assert np.all(labels >= 0) and np.all(labels <= 1)
 
-    def test_marginals_respond_to_syndrome(self) -> None:
-        """Marginals should be higher when endpoint detectors fire."""
-        from decoders.tensor_network import TNDecoder
-
-        config = DecoderConfig(
-            num_detectors=4,
-            num_observables=1,
-            has_boundary=False,
-        )
-        und_pairs = np.array([[0, 1], [1, 2], [2, 3]], dtype=np.int64)
-        edge_probs = np.array([0.1, 0.1, 0.1])
-        decoder = TNDecoder(config, und_pairs, edge_probs)
-
-        quiet = decoder._compute_edge_marginals(np.array([0, 0, 0, 0], dtype=np.uint8))
-        fired = decoder._compute_edge_marginals(np.array([1, 1, 0, 0], dtype=np.uint8))
-
-        # Edge (0,1) should have higher marginal when both endpoints fire
-        assert fired[0] > quiet[0]
-
     def test_zero_syndrome_low_marginals(self) -> None:
         from decoders.tensor_network import TNDecoder
 
@@ -188,3 +180,207 @@ class TestTNDecoder:
             np.array([0.1]),
         )
         assert decoder.name == "TNDecoder"
+
+
+class TestCheckTensor:
+    """Unit tests for parity-check tensor construction."""
+
+    def test_degree1_parity0(self) -> None:
+        from decoders.tensor_network import TNDecoder
+
+        t = TNDecoder._build_check_tensor(degree=1, target_parity=0)
+        assert t.shape == (2,)
+        np.testing.assert_array_equal(t, [1.0, 0.0])
+
+    def test_degree1_parity1(self) -> None:
+        from decoders.tensor_network import TNDecoder
+
+        t = TNDecoder._build_check_tensor(degree=1, target_parity=1)
+        np.testing.assert_array_equal(t, [0.0, 1.0])
+
+    def test_degree2_parity0(self) -> None:
+        from decoders.tensor_network import TNDecoder
+
+        t = TNDecoder._build_check_tensor(degree=2, target_parity=0)
+        assert t.shape == (2, 2)
+        np.testing.assert_array_equal(t, [[1, 0], [0, 1]])
+
+    def test_degree2_parity1(self) -> None:
+        from decoders.tensor_network import TNDecoder
+
+        t = TNDecoder._build_check_tensor(degree=2, target_parity=1)
+        np.testing.assert_array_equal(t, [[0, 1], [1, 0]])
+
+    def test_degree3_count(self) -> None:
+        from decoders.tensor_network import TNDecoder
+
+        t = TNDecoder._build_check_tensor(degree=3, target_parity=0)
+        assert t.shape == (2, 2, 2)
+        assert t.sum() == 4
+
+    def test_degree4_symmetry(self) -> None:
+        from decoders.tensor_network import TNDecoder
+
+        t0 = TNDecoder._build_check_tensor(degree=4, target_parity=0)
+        t1 = TNDecoder._build_check_tensor(degree=4, target_parity=1)
+        assert t0.sum() == 8
+        assert t1.sum() == 8
+        np.testing.assert_array_equal(t0 + t1, np.ones([2] * 4))
+
+
+@_skip_no_gpu
+class TestExactMarginals:
+    """Analytically verified exact marginal tests."""
+
+    def test_line_graph_both_fire(self) -> None:
+        """det0 -- e0 -- det1 -- e1 -- det2, syndrome [1,0,1].
+
+        Only consistent solution: e0=1, e1=1.
+        """
+        from decoders.tensor_network import TNDecoder
+
+        config = DecoderConfig(
+            num_detectors=3,
+            num_observables=1,
+            has_boundary=False,
+        )
+        und_pairs = np.array([[0, 1], [1, 2]], dtype=np.int64)
+        edge_probs = np.array([0.1, 0.2])
+        decoder = TNDecoder(config, und_pairs, edge_probs)
+
+        m = decoder._compute_edge_marginals(np.array([1, 0, 1], dtype=np.uint8))
+        np.testing.assert_allclose(m[0], 1.0, atol=1e-6)
+        np.testing.assert_allclose(m[1], 1.0, atol=1e-6)
+
+    def test_line_graph_zero_syndrome(self) -> None:
+        """det0 -- e0 -- det1 -- e1 -- det2, syndrome [0,0,0].
+
+        Only consistent solution: e0=0, e1=0.
+        """
+        from decoders.tensor_network import TNDecoder
+
+        config = DecoderConfig(
+            num_detectors=3,
+            num_observables=1,
+            has_boundary=False,
+        )
+        und_pairs = np.array([[0, 1], [1, 2]], dtype=np.int64)
+        edge_probs = np.array([0.1, 0.2])
+        decoder = TNDecoder(config, und_pairs, edge_probs)
+
+        m = decoder._compute_edge_marginals(np.zeros(3, dtype=np.uint8))
+        np.testing.assert_allclose(m[0], 0.0, atol=1e-6)
+        np.testing.assert_allclose(m[1], 0.0, atol=1e-6)
+
+    def test_line_graph_single_error(self) -> None:
+        """det0 -- e0 -- det1 -- e1 -- det2, syndrome [1,1,0].
+
+        Only consistent solution: e0=1, e1=0.
+        """
+        from decoders.tensor_network import TNDecoder
+
+        config = DecoderConfig(
+            num_detectors=3,
+            num_observables=1,
+            has_boundary=False,
+        )
+        und_pairs = np.array([[0, 1], [1, 2]], dtype=np.int64)
+        edge_probs = np.array([0.1, 0.2])
+        decoder = TNDecoder(config, und_pairs, edge_probs)
+
+        m = decoder._compute_edge_marginals(np.array([1, 1, 0], dtype=np.uint8))
+        np.testing.assert_allclose(m[0], 1.0, atol=1e-6)
+        np.testing.assert_allclose(m[1], 0.0, atol=1e-6)
+
+    def test_cycle_ambiguous(self) -> None:
+        """4-node cycle, syndrome [1,1,0,0].
+
+        Two solutions:
+          A: e0=1, rest=0  -> weight = 0.1 * 0.9^3
+          B: e1=e2=e3=1    -> weight = 0.9 * 0.1^3
+        """
+        from decoders.tensor_network import TNDecoder
+
+        config = DecoderConfig(
+            num_detectors=4,
+            num_observables=1,
+            has_boundary=False,
+        )
+        und_pairs = np.array([[0, 1], [1, 2], [2, 3], [3, 0]], dtype=np.int64)
+        edge_probs = np.full(4, 0.1)
+        decoder = TNDecoder(config, und_pairs, edge_probs)
+
+        m = decoder._compute_edge_marginals(np.array([1, 1, 0, 0], dtype=np.uint8))
+
+        wa = 0.1 * 0.9**3  # solution A
+        wb = 0.9 * 0.1**3  # solution B
+        z = wa + wb
+
+        np.testing.assert_allclose(m[0], wa / z, atol=1e-6)
+        np.testing.assert_allclose(m[1], wb / z, atol=1e-6)
+        np.testing.assert_allclose(m[2], wb / z, atol=1e-6)
+        np.testing.assert_allclose(m[3], wb / z, atol=1e-6)
+
+    def test_boundary_edge(self) -> None:
+        """det0 -- e0 -- det1 -- e1 -- boundary(2), syndrome [1,1].
+
+        check_0: e0 = 1.  check_1: e0 XOR e1 = 1 -> e1 = 0.
+        """
+        from decoders.tensor_network import TNDecoder
+
+        config = DecoderConfig(
+            num_detectors=2,
+            num_observables=1,
+            has_boundary=True,
+            boundary_node=2,
+        )
+        und_pairs = np.array([[0, 1], [1, 2]], dtype=np.int64)
+        edge_probs = np.array([0.1, 0.1])
+        decoder = TNDecoder(config, und_pairs, edge_probs)
+
+        m = decoder._compute_edge_marginals(np.array([1, 1], dtype=np.uint8))
+        np.testing.assert_allclose(m[0], 1.0, atol=1e-6)
+        np.testing.assert_allclose(m[1], 0.0, atol=1e-6)
+
+    def test_boundary_edge_flipped(self) -> None:
+        """det0 -- e0 -- det1 -- e1 -- boundary(2), syndrome [0,1].
+
+        check_0: e0 = 0.  check_1: e0 XOR e1 = 1 -> e1 = 1.
+        """
+        from decoders.tensor_network import TNDecoder
+
+        config = DecoderConfig(
+            num_detectors=2,
+            num_observables=1,
+            has_boundary=True,
+            boundary_node=2,
+        )
+        und_pairs = np.array([[0, 1], [1, 2]], dtype=np.int64)
+        edge_probs = np.array([0.1, 0.1])
+        decoder = TNDecoder(config, und_pairs, edge_probs)
+
+        m = decoder._compute_edge_marginals(np.array([0, 1], dtype=np.uint8))
+        np.testing.assert_allclose(m[0], 0.0, atol=1e-6)
+        np.testing.assert_allclose(m[1], 1.0, atol=1e-6)
+
+    def test_soft_label_generator_matches_decoder(self) -> None:
+        """TNSoftLabelGenerator produces same marginals as TNDecoder."""
+        from decoders.tensor_network import TNDecoder, TNSoftLabelGenerator
+
+        config = DecoderConfig(
+            num_detectors=3,
+            num_observables=1,
+            has_boundary=False,
+        )
+        und_pairs = np.array([[0, 1], [1, 2]], dtype=np.int64)
+        edge_probs = np.array([0.1, 0.2])
+
+        gen = TNSoftLabelGenerator(config, und_pairs, edge_probs)
+        decoder = TNDecoder(config, und_pairs, edge_probs)
+
+        syndromes = np.array([[1, 0, 1], [0, 0, 0], [1, 1, 0]], dtype=np.uint8)
+        labels = gen.generate_soft_labels(syndromes)
+
+        for i in range(syndromes.shape[0]):
+            expected = decoder._compute_edge_marginals(syndromes[i])
+            np.testing.assert_allclose(labels[i], expected, atol=1e-6)

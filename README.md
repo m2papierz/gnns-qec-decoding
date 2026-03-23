@@ -14,10 +14,10 @@ An end-to-end project on decoding topological quantum error-correcting codes wit
 > - [x] Swappable compute backend (`pytorch`, `compiled`, `cuda`)
 > - [x] Pluggable decoder interface (`decoders/`)
 > - [x] Custom CUDA kernels for hot paths (symmetric edge features, fused norm+residual, graph-normalized BCE)
+> - [x] cuTensorNet exact contraction for TN decoder (with heuristic fallback)
 >
 > ### In progress / experimental
 > - [ ] GNN `tn_teacher` — tensor-network soft labels as training targets
-> - [ ] cuTensorNet exact contraction for TN decoder (heuristic placeholder active)
 > - [ ] TensorRT deployment path for low-latency inference
 > - [ ] Benchmark harness (latency, throughput, memory across backends)
 >
