@@ -305,7 +305,7 @@ class Evaluator:
         syndrome: np.ndarray,
         logical: np.ndarray,
         meta: _SettingMeta,
-    ) -> tuple[int, int, float]:
+    ) -> tuple[int, int, float | None]:
         """Evaluate edge case: per-shot GNN weights => decoder => LER."""
         n = syndrome.shape[0]
         edges_per_graph = edge_index_np.shape[1]
@@ -346,7 +346,7 @@ class Evaluator:
                 predicted[off + g] = decoder_cache[cache_key].decode(syndrome[off + g])
 
         shot_errors = np.any(predicted != logical, axis=1)
-        return n, int(shot_errors.sum()), float("nan")
+        return n, int(shot_errors.sum()), None
 
     def run(self) -> EvalReport:
         """
