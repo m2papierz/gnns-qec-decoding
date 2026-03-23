@@ -219,9 +219,19 @@ class TestBackendManagement:
         set_backend("pytorch")  # restore
 
     def test_cuda_fallback_when_unavailable(self) -> None:
-        """Requesting cuda without extension installed falls back to pytorch."""
+        """Requesting cuda falls back to pytorch if extension is missing,
+        or stays on cuda if kernels are built."""
         set_backend("cuda")
-        assert get_backend() == Backend.PYTORCH
+        try:
+            import kernels
+
+            if kernels.AVAILABLE:
+                assert get_backend() == Backend.CUDA
+            else:
+                assert get_backend() == Backend.PYTORCH
+        except ImportError:
+            assert get_backend() == Backend.PYTORCH
+        set_backend("pytorch")  # restore
 
     def test_invalid_backend_raises(self) -> None:
         with pytest.raises(ValueError):
@@ -319,3 +329,233 @@ class TestBuildModelTnTeacher:
 
         total_edges = batch.edge_attr.shape[0]
         assert logits.shape == (total_edges,)
+
+
+def _cuda_ops_available() -> bool:
+    """Check if CUDA kernels are built and GPU is present."""
+    if not torch.cuda.is_available():
+        return False
+    try:
+        import kernels
+
+        return kernels.AVAILABLE
+    except ImportError:
+        return False
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="no GPU",
+)
+class TestCUDABackendEquivalence:
+    """Verify CUDA kernels match PyTorch reference."""
+
+    _skip = pytest.mark.skipif(not _cuda_ops_available(), reason="CUDA ops not built")
+
+    @_skip
+    def test_symmetric_edge_features_matches(self) -> None:
+        x, ei, eh = _make_graph()
+        x, ei, eh = x.cuda(), ei.cuda(), eh.cuda()
+
+        set_backend("pytorch")
+        ref = symmetric_edge_features(x, ei, eh)
+
+        set_backend("cuda")
+        out = symmetric_edge_features(x, ei, eh)
+        set_backend("pytorch")
+
+        torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
+
+    @_skip
+    def test_symmetric_edge_features_zero_edges(self) -> None:
+        x = torch.randn(5, 8).cuda()
+        ei = torch.zeros(2, 0, dtype=torch.long).cuda()
+        eh = torch.zeros(0, 8).cuda()
+
+        set_backend("cuda")
+        out = symmetric_edge_features(x, ei, eh)
+        set_backend("pytorch")
+
+        assert out.shape == (0, 24)
+
+    @_skip
+    def test_symmetric_edge_features_odd_hidden(self) -> None:
+        """hidden_dim=7 forces scalar path (not divisible by 4)."""
+        x, ei, eh = _make_graph(hidden=7)
+        x, ei, eh = x.cuda(), ei.cuda(), eh.cuda()
+
+        set_backend("pytorch")
+        ref = symmetric_edge_features(x, ei, eh)
+
+        set_backend("cuda")
+        out = symmetric_edge_features(x, ei, eh)
+        set_backend("pytorch")
+
+        torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
+
+    @_skip
+    def test_symmetric_edge_features_self_loops(self) -> None:
+        x = torch.randn(4, 16).cuda()
+        ei = torch.tensor([[0, 1, 2], [0, 1, 2]], dtype=torch.long).cuda()
+        eh = torch.randn(3, 16).cuda()
+
+        set_backend("pytorch")
+        ref = symmetric_edge_features(x, ei, eh)
+
+        set_backend("cuda")
+        out = symmetric_edge_features(x, ei, eh)
+        set_backend("pytorch")
+
+        torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
+
+    @_skip
+    def test_symmetric_edge_features_single_edge(self) -> None:
+        x = torch.randn(2, 32).cuda()
+        ei = torch.tensor([[0], [1]], dtype=torch.long).cuda()
+        eh = torch.randn(1, 32).cuda()
+
+        set_backend("pytorch")
+        ref = symmetric_edge_features(x, ei, eh)
+
+        set_backend("cuda")
+        out = symmetric_edge_features(x, ei, eh)
+        set_backend("pytorch")
+
+        torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
+
+    @_skip
+    def test_symmetric_edge_features_large_hidden(self) -> None:
+        """hidden_dim=256 to stress vectorized path."""
+        x, ei, eh = _make_graph(n_nodes=20, n_edges=50, hidden=256)
+        x, ei, eh = x.cuda(), ei.cuda(), eh.cuda()
+
+        set_backend("pytorch")
+        ref = symmetric_edge_features(x, ei, eh)
+
+        set_backend("cuda")
+        out = symmetric_edge_features(x, ei, eh)
+        set_backend("pytorch")
+
+        torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
+
+    @_skip
+    def test_fused_norm_residual_dropout_matches(self) -> None:
+        x = torch.randn(8, 16).cuda()
+        residual = torch.randn(8, 16).cuda()
+        norm = nn.LayerNorm(16).cuda()
+        dropout = nn.Dropout(0.0)
+
+        set_backend("pytorch")
+        ref = fused_norm_residual_dropout(x, residual, norm, dropout, training=False)
+
+        set_backend("cuda")
+        out = fused_norm_residual_dropout(x, residual, norm, dropout, training=False)
+        set_backend("pytorch")
+
+        torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
+
+    @_skip
+    def test_fused_norm_residual_dropout_single_row(self) -> None:
+        x = torch.randn(1, 32).cuda()
+        residual = torch.randn(1, 32).cuda()
+        norm = nn.LayerNorm(32).cuda()
+        dropout = nn.Dropout(0.0)
+
+        set_backend("pytorch")
+        ref = fused_norm_residual_dropout(x, residual, norm, dropout, training=False)
+
+        set_backend("cuda")
+        out = fused_norm_residual_dropout(x, residual, norm, dropout, training=False)
+        set_backend("pytorch")
+
+        torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
+
+    @_skip
+    def test_fused_norm_residual_dropout_odd_hidden(self) -> None:
+        x = torch.randn(4, 7).cuda()
+        residual = torch.randn(4, 7).cuda()
+        norm = nn.LayerNorm(7).cuda()
+        dropout = nn.Dropout(0.0)
+
+        set_backend("pytorch")
+        ref = fused_norm_residual_dropout(x, residual, norm, dropout, training=False)
+
+        set_backend("cuda")
+        out = fused_norm_residual_dropout(x, residual, norm, dropout, training=False)
+        set_backend("pytorch")
+
+        torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
+
+    @_skip
+    def test_graph_normalized_bce_matches(self) -> None:
+        logits = torch.randn(20).cuda()
+        target = torch.randint(0, 2, (20,)).float().cuda()
+        edge_graph = torch.tensor([0] * 10 + [1] * 10).cuda()
+
+        set_backend("pytorch")
+        ref = graph_normalized_bce(logits, target, edge_graph, n_graphs=2)
+
+        set_backend("cuda")
+        out = graph_normalized_bce(logits, target, edge_graph, n_graphs=2)
+        set_backend("pytorch")
+
+        torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
+
+    @_skip
+    def test_graph_normalized_bce_single_graph(self) -> None:
+        logits = torch.randn(10).cuda()
+        target = torch.randint(0, 2, (10,)).float().cuda()
+        edge_graph = torch.zeros(10, dtype=torch.long).cuda()
+
+        set_backend("pytorch")
+        ref = graph_normalized_bce(logits, target, edge_graph, n_graphs=1)
+
+        set_backend("cuda")
+        out = graph_normalized_bce(logits, target, edge_graph, n_graphs=1)
+        set_backend("pytorch")
+
+        torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
+
+    @_skip
+    def test_graph_normalized_bce_with_pos_weight(self) -> None:
+        logits = torch.randn(20).cuda()
+        target = torch.randint(0, 2, (20,)).float().cuda()
+        edge_graph = torch.tensor([0] * 10 + [1] * 10).cuda()
+        pw = torch.tensor([5.0]).cuda()
+
+        set_backend("pytorch")
+        ref = graph_normalized_bce(
+            logits,
+            target,
+            edge_graph,
+            n_graphs=2,
+            pos_weight=pw,
+        )
+
+        set_backend("cuda")
+        out = graph_normalized_bce(
+            logits,
+            target,
+            edge_graph,
+            n_graphs=2,
+            pos_weight=pw,
+        )
+        set_backend("pytorch")
+
+        torch.testing.assert_close(out, ref, atol=1e-4, rtol=1e-4)
+
+    @_skip
+    def test_graph_normalized_bce_uneven_graphs(self) -> None:
+        """Graphs of different sizes — tests normalization correctness."""
+        logits = torch.randn(15).cuda()
+        target = torch.randint(0, 2, (15,)).float().cuda()
+        edge_graph = torch.tensor([0] * 3 + [1] * 5 + [2] * 7).cuda()
+
+        set_backend("pytorch")
+        ref = graph_normalized_bce(logits, target, edge_graph, n_graphs=3)
+
+        set_backend("cuda")
+        out = graph_normalized_bce(logits, target, edge_graph, n_graphs=3)
+        set_backend("pytorch")
+
+        torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)

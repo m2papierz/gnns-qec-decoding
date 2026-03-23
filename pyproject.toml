@@ -8,6 +8,7 @@ dependencies = [
     "cuquantum-python-cu12>=26.1.0",
     "ipykernel>=7.1.0",
     "networkx>=3.6.1",
+    "ninja>=1.13.0",
     "numpy>=2.3.5",
     "pymatching>=2.3.1",
     "pyyaml>=6.0.3",

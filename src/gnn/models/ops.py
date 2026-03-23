@@ -13,7 +13,7 @@ Backends
     ``torch.compile``-wrapped PyTorch — identical numerics, kernel fusion
     handled by the compiler.
 ``"cuda"``
-    Hand-written CUDA kernels loaded from ``cuda_ops`` (requires build).
+    Hand-written CUDA kernels loaded from ``kernels`` (requires build).
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ def set_backend(backend: str | Backend) -> None:
 
     if backend == Backend.CUDA:
         try:
-            import cuda_ops.ops as _mod
+            import kernels.ops as _mod
 
             _cuda_module = _mod
         except ImportError:
