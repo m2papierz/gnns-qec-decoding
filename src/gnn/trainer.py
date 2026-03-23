@@ -28,6 +28,7 @@ from torch_geometric.loader import DataLoader
 from constants import Case
 from gnn.dataset import MixedSurfaceCodeDataset
 from gnn.models.heads import QECDecoder, build_model
+from gnn.models.ops import graph_normalized_bce
 
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,9 @@ class _GraphNormalizedBCE(nn.Module):
     Computes per-edge BCE, averages within each graph, then averages
     across graphs.  Prevents larger graphs from dominating the gradient
     in mixed-distance batches.
+
+    Delegates to :func:`gnn.models.ops.graph_normalized_bce` which
+    dispatches to the active compute backend (PyTorch / CUDA).
     """
 
     def __init__(self, pos_weight: torch.Tensor | None = None) -> None:
@@ -180,16 +184,15 @@ class _GraphNormalizedBCE(nn.Module):
         target: torch.Tensor,
         batch: Batch,
     ) -> torch.Tensor:
-        raw = F.binary_cross_entropy_with_logits(
-            logits, target, pos_weight=self.pos_weight, reduction="none"
-        )
         edge_graph = batch.batch[batch.edge_index[0]]
         n_graphs = int(batch.batch.max()) + 1
-        graph_loss = torch.zeros(n_graphs, device=logits.device)
-        graph_count = torch.zeros(n_graphs, device=logits.device)
-        graph_loss.scatter_add_(0, edge_graph, raw)
-        graph_count.scatter_add_(0, edge_graph, torch.ones_like(raw))
-        return (graph_loss / graph_count.clamp(min=1)).mean()
+        return graph_normalized_bce(
+            logits,
+            target,
+            edge_graph,
+            n_graphs,
+            self.pos_weight,
+        )
 
 
 class _SoftTeacherLoss(nn.Module):
