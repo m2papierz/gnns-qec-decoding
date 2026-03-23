@@ -113,7 +113,9 @@ class TestEdgeHead:
 class TestQECDecoder:
     """Tests for the full encoder + head pipeline."""
 
-    @pytest.mark.parametrize("case", ["logical_head", "mwpm_teacher", "hybrid"])
+    @pytest.mark.parametrize(
+        "case", ["logical_head", "mwpm_teacher", "hybrid", "tn_teacher"]
+    )
     def test_forward_runs(self, case: str, batched: Batch) -> None:
         model = build_model(
             case,

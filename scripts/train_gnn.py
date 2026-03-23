@@ -44,7 +44,20 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
         "--case",
         type=str,
         default=None,
-        choices=["logical_head", "mwpm_teacher", "hybrid"],
+        choices=["logical_head", "mwpm_teacher", "hybrid", "tn_teacher"],
+    )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default=None,
+        choices=["pytorch", "compiled", "cuda"],
+        help="Compute backend (overrides config)",
+    )
+    parser.add_argument(
+        "--compile-mode",
+        type=str,
+        default=None,
+        help="torch.compile mode (only used with --backend compiled)",
     )
     parser.add_argument("--datasets-dir", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
@@ -98,6 +111,8 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
         "seed": args.seed,
         "resume": args.resume,
         "max_samples": args.max_samples,
+        "backend": args.backend,
+        "compile_mode": args.compile_mode,
     }
 
     cfg_dict = asdict(cfg)
