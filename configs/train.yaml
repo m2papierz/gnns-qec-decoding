@@ -1,8 +1,12 @@
 # GNN Training Configuration
 # ==========================
 
-# Training case: "logical_head", "mwpm_teacher", or "hybrid"
+# Training case: "logical_head", "mwpm_teacher", "hybrid", or "tn_teacher"
 case: "logical_head"
+
+# Compute backend: "pytorch", "compiled", or "cuda"
+backend: "pytorch"
+compile_mode: "reduce-overhead"
 
 # Data paths
 datasets_dir: "./data/datasets"
@@ -27,7 +31,7 @@ num_workers: 4
 # Sample cap for fast iteration (null = use all data)
 max_samples: null
 
-# Edge-case specific (mwpm_teacher / hybrid).
+# Edge-case specific (mwpm_teacher / hybrid; ignored for tn_teacher).
 # Set to null to auto-estimate from training data.
 edge_pos_weight: null
 
