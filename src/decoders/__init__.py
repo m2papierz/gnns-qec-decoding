@@ -8,4 +8,6 @@ __all__ = [
     "BaseDecoder",
     "DecoderConfig",
     "MWPMDecoder",
+    "TNDecoder",
+    "TNSoftLabelGenerator",
 ]
