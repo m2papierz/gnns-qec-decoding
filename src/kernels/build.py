@@ -44,7 +44,7 @@ def build(verbose: bool = True) -> object:
     return load(
         name="_C",
         sources=_SOURCES,
-        extra_include_paths=[str(_CPP / "include")],
+        extra_include_paths=[str(_CPP)],
         extra_cflags=_CXX_FLAGS,
         extra_cuda_cflags=_NVCC_FLAGS,
         verbose=verbose,

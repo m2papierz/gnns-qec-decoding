@@ -37,7 +37,7 @@ setup(
                 str(cuda_src / "bindings.cpp"),
             ],
             include_dirs=[
-                str(cuda_src / "include"),
+                str(cuda_src),
             ],
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17"],
