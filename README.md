@@ -11,18 +11,19 @@ An end-to-end project on decoding topological quantum error-correcting codes wit
 > - [x] GNN `logical_head` training & evaluation (research-grade, not yet optimized)
 > - [x] GNN `mwpm_teacher` training & evaluation (research-grade, not yet optimized)
 > - [x] GNN `hybrid` training & evaluation (research-grade, not yet optimized)
+> - [x] Swappable compute backend (`pytorch`, `compiled`, `cuda`)
+> - [x] Pluggable decoder interface (`decoders/`)
 >
 > ### In progress / experimental
-> - [ ] TensorRT deployment path (ONNX export + TRT engine build) for low-latency inference
-> - [ ] Custom CUDA **tiled kernels** for hot paths (e.g., syndrome => features, message aggregation)
-> - [ ] GNN `logical_head` mode hardening
-> - [ ] GNN `mwpm_teacher` mode hardening
-> - [ ] GNN `hybrid` mode hardening
+> - [ ] GNN `tn_teacher` — tensor-network soft labels as training targets
+> - [ ] cuTensorNet decoder for TN soft label generation
+> - [ ] Custom CUDA kernels for hot paths (symmetric edge features, fused norm+residual, graph-normalized BCE)
+> - [ ] TensorRT deployment path for low-latency inference
+> - [ ] Benchmark harness (latency, throughput, memory across backends)
 >
 > ### Benchmarks (planned)
 > - [ ] LER curves vs **(p, d, r)** + threshold estimate
 > - [ ] End-to-end **latency** and **throughput** (shots/s), incl. ablations: FP32 vs FP16/INT8, with/without custom kernels
->
 
 ## Background
 
@@ -50,13 +51,14 @@ Stim's detector error model (DEM) describes which physical faults trigger which 
 
 **MWPM (Minimum-Weight Perfect Matching)** is the standard classical decoder. It pairs up triggered detectors (or pairs them with the boundary) to find the lowest-weight explanation of the syndrome, then reads off whether the logical observable flipped. PyMatching implements this efficiently.
 
-**GNN decoders** operate on the same detector graph but can learn richer error structure. This project explores three modes:
+**GNN decoders** operate on the same detector graph but can learn richer error structure. This project explores four modes:
 
 | Mode | What the GNN predicts | Why |
 |------|----------------------|-----|
 | `logical_head` | Observable flip directly from the graph + syndrome | Simplest end-to-end approach |
 | `mwpm_teacher` | Which edges MWPM selected (distillation) | Faster inference with comparable accuracy |
 | `hybrid` | New edge weights fed back into MWPM | Can outperform MWPM by learning a better noise model |
+| `tn_teacher` | Per-edge error marginals from tensor-network contraction | Richer continuous supervision than binary MWPM labels |
 
 ## Developer setup
 
@@ -123,8 +125,9 @@ Train a GNN decoder and evaluate against the MWPM baseline:
 # Train (start with logical_head)
 uv run scripts/train_gnn.py -c configs/train.yaml
 
-# Override case
+# Override case or backend
 uv run scripts/train_gnn.py -c configs/train.yaml --case mwpm_teacher
+uv run scripts/train_gnn.py -c configs/train.yaml --backend compiled
 
 # Evaluate with MWPM comparison
 uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \
@@ -132,4 +135,4 @@ uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \
 ```
 
 See [`src/gnn/README.md`](src/gnn/README.md) for architecture details,
-hyperparameters, all three training modes, and evaluation protocols.
+hyperparameters, all four training modes, and evaluation protocols.

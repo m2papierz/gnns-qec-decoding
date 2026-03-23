@@ -4,8 +4,7 @@ Graph neural network decoders for rotated surface code, operating on the detecto
 
 ## Architecture
 
-All three training modes share a single encoder backbone; only the
-prediction head differs.
+All four training modes share a single encoder backbone; only the prediction head differs.
 
 ```
                        ┌─────────────────────────────────────────────┐
@@ -40,6 +39,19 @@ Input/output:
 - **In**: `x (N, 1)` syndrome bits, `edge_attr (E, 2)` `[error_prob, weight]`
 - **Out**: `h (N, hidden_dim)` node embeddings, `edge_h (E, hidden_dim)` edge embeddings
 
+### Swappable compute operations (`models/ops.py`)
+
+The encoder and heads forward passes delegate compute-intensive patterns
+to `gnn.models.ops`, which dispatches to one of three backends:
+
+| Backend | Description |
+|---------|-------------|
+| `pytorch` | Pure PyTorch reference implementations (default) |
+| `compiled` | `torch.compile`-wrapped PyTorch — same numerics, compiler-driven kernel fusion |
+| `cuda` | Hand-written CUDA kernels |
+
+Set via `QECDEC_BACKEND` env var or `set_backend()` at runtime.
+
 ### Heads (`models/heads.py`)
 
 **LogicalHead** — graph-level observable prediction:
@@ -48,7 +60,7 @@ Input/output:
 3. Mean pooling over edge embeddings per graph => `(B, H)`
 4. Concatenate all three => two-layer MLP => `(B, num_observables)` logits
 
-**EdgeHead** — per-edge prediction (used by both `mwpm_teacher` and `hybrid`):
+**EdgeHead** — per-edge prediction (used by `mwpm_teacher`, `hybrid`, and `tn_teacher`):
 1. Symmetric node pair: `[h_u + h_v, |h_u − h_v|, edge_h]` => `(E, 3H)`
 2. Two-layer MLP => `(E,)` logits
 
@@ -60,10 +72,23 @@ from gnn.models import build_model
 model = build_model("logical_head", hidden_dim=64, num_layers=4)
 model = build_model("mwpm_teacher", hidden_dim=64, num_layers=4)
 model = build_model("hybrid", hidden_dim=64, num_layers=4)
+model = build_model("tn_teacher", hidden_dim=64, num_layers=4)
 ```
 
-`mwpm_teacher` and `hybrid` produce identical architectures — they
-differ only in loss computation and evaluation protocol.
+`mwpm_teacher`, `hybrid`, and `tn_teacher` produce identical architectures —
+they differ in loss computation, label format, and evaluation protocol.
+
+## Decoders (`decoders/`)
+
+Pluggable decoder interface for converting GNN edge logits to
+observable predictions.
+
+| Decoder | Description |
+|---------|-------------|
+| `MWPMDecoder` | PyMatching-backed MWPM; accepts static or GNN-derived weights |
+
+All decoders implement `BaseDecoder` with `decode()` and `decode_batch()`.
+The evaluator selects a decoder via `--decoder-type`.
 
 ## Training
 
@@ -75,6 +100,9 @@ uv run scripts/train_gnn.py -c configs/train.yaml
 
 # Override case and epochs
 uv run scripts/train_gnn.py -c configs/train.yaml --case mwpm_teacher --epochs 50
+
+# Use torch.compile backend
+uv run scripts/train_gnn.py -c configs/train.yaml --backend compiled
 
 # Pure CLI (no config file)
 uv run scripts/train_gnn.py --case logical_head --epochs 50
@@ -95,6 +123,8 @@ flags provide per-run tweaks.
 
 ```yaml
 case: "logical_head"
+backend: "pytorch"          # "pytorch" | "compiled" | "cuda"
+compile_mode: "reduce-overhead"
 model:
   hidden_dim: 64
   num_layers: 4
@@ -115,12 +145,14 @@ Programmatic access: `TrainConfig.from_yaml("configs/train.yaml")`.
 | `logical_head` | `BCEWithLogitsLoss` | Graph-level: logits vs observable ground truth |
 | `mwpm_teacher` | `_GraphNormalizedBCE` + `pos_weight` | Per-edge BCE averaged within each graph, then across graphs. Prevents larger graphs (higher `d`) from dominating gradients. `pos_weight` auto-estimated from training data |
 | `hybrid` | Same as `mwpm_teacher` | Same architecture and loss; different evaluation |
+| `tn_teacher` | `_SoftTeacherLoss` | Graph-normalized MSE between `sigmoid(logits)` and continuous TN marginals |
 
 ### Training details
 
 - **Optimiser**: AdamW (lr=1e-3, weight_decay=1e-4)
 - **Scheduler**: Linear warmup (5% of epochs, from 1% of peak lr) followed by cosine annealing to lr/50
 - **Mixed precision**: AMP enabled automatically on CUDA (GradScaler + autocast)
+- **Data loading**: persistent workers + prefetch for reduced overhead
 - **Checkpointing**: saves `best.pt` when validation metric improves
   - `logical_head`: tracks validation LER (lower is better)
   - edge cases: tracks validation loss (lower is better)
@@ -147,6 +179,7 @@ outputs/runs/{case}/
 | `epochs` | 100 | |
 | `batch_size` | 64 | Graphs per batch |
 | `num_workers` | 4 | DataLoader parallelism |
+| `backend` | `pytorch` | Compute backend |
 
 ## Evaluation
 
@@ -172,12 +205,11 @@ uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \
 threshold the logit at 0 => predicted observable. Compare with ground
 truth. Report LER per setting.
 
-**`mwpm_teacher` / `hybrid`**: for each setting, collect per-edge
-logits across all shots, average per undirected edge, convert to MWPM
-weights via `sigmoid => log((1-p)/p)`, build a PyMatching decoder with
-these weights, decode all syndromes, compare with ground truth.  This
-tests whether the GNN learned a better noise model than the static DEM
-weights.
+**`mwpm_teacher` / `hybrid` / `tn_teacher`**: for each setting, collect
+per-edge logits across all shots, build a decoder (MWPM by default)
+from the GNN-predicted weights, decode all syndromes, compare with
+ground truth.  The decoder is selected via the `decoder_type` parameter
+(default: `"mwpm"`).
 
 ### Output format
 
@@ -191,7 +223,7 @@ GNN better in 12/108 settings (marked with *)
 ```
 
 JSON reports follow the same schema as the MWPM baseline, with added
-`mwpm_ler` and `edge_acc` fields per setting.
+`mwpm_ler` field per setting.
 
 ## Dataset interface
 
@@ -206,7 +238,7 @@ Each `__getitem__` returns a PyG `Data` with:
 | `x` | `(N, 1)` | Syndrome bits (0/1 float), boundary node = 0 |
 | `edge_index` | `(2, E)` | Directed COO (both directions stored) |
 | `edge_attr` | `(E, 2)` | `[error_prob, weight]` |
-| `y` | varies | `(num_obs,)` for logical; `(E,)` for edge cases |
+| `y` | varies | `(num_obs,)` for logical; `(E,)` binary for mwpm_teacher/hybrid; `(E,)` float32 marginals for tn_teacher |
 | `logical` | `(num_obs,)` | Always present for evaluation |
 | `setting_id` | scalar | Setting index for debugging |
 
