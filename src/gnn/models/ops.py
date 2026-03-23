@@ -193,7 +193,7 @@ def edge_mean_pool(
     """
     from torch_geometric.nn import global_add_pool
 
-    g_edge = global_add_pool(edge_h, edge_batch)
+    g_edge = global_add_pool(edge_h, edge_batch, size=n_graphs)
     edge_counts = torch.zeros(n_graphs, device=edge_h.device)
     edge_counts.scatter_add_(
         0, edge_batch, torch.ones(edge_batch.shape[0], device=edge_h.device)
