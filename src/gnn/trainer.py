@@ -41,7 +41,8 @@ class TrainConfig:
     Attributes
     ----------
     case : str
-        Training case: ``"logical_head"``, ``"mwpm_teacher"``, or ``"hybrid"``.
+        Training case: ``"logical_head"``, ``"mwpm_teacher"``,
+        ``"hybrid"``, or ``"tn_teacher"``.
     datasets_dir : Path
         Root directory of packaged datasets.
     output_dir : Path
@@ -64,7 +65,7 @@ class TrainConfig:
         DataLoader worker processes.
     edge_pos_weight : float or None
         Positive-class weight for edge BCE loss.  If None, estimated
-        from training data.
+        from training data.  Ignored for ``tn_teacher``.
     max_grad_norm : float
         Maximum gradient norm for clipping.
     patience : int
@@ -78,6 +79,10 @@ class TrainConfig:
         Path to checkpoint to resume from.
     max_samples : int or None
         Cap on training samples (validation capped at ``max_samples // 5``).
+    backend : str
+        Compute backend: ``"pytorch"``, ``"compiled"``, or ``"cuda"``.
+    compile_mode : str
+        ``torch.compile`` mode (only used when backend is ``"compiled"``).
     """
 
     case: Case = "logical_head"
@@ -98,6 +103,8 @@ class TrainConfig:
     seed: int = 42
     resume: Path | None = None
     max_samples: int | None = None
+    backend: str = "pytorch"
+    compile_mode: str = "reduce-overhead"
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "TrainConfig":
@@ -117,6 +124,8 @@ class TrainConfig:
             "val_every",
             "seed",
             "max_samples",
+            "backend",
+            "compile_mode",
         ):
             if key in raw:
                 flat[key] = raw[key]
@@ -183,6 +192,33 @@ class _GraphNormalizedBCE(nn.Module):
         return (graph_loss / graph_count.clamp(min=1)).mean()
 
 
+class _SoftTeacherLoss(nn.Module):
+    """
+    Graph-normalized MSE between predicted probabilities and TN marginals.
+
+    For ``tn_teacher``: targets are continuous per-edge marginals in
+    ``[0, 1]`` (not binary labels).  Loss is computed as MSE between
+    ``sigmoid(logits)`` and the soft targets, averaged within each
+    graph, then averaged across graphs.
+    """
+
+    def forward(
+        self,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        batch: Batch,
+    ) -> torch.Tensor:
+        pred = torch.sigmoid(logits)
+        edge_graph = batch.batch[batch.edge_index[0]]
+        n_graphs = int(batch.batch.max()) + 1
+        raw = F.mse_loss(pred, target, reduction="none")
+        graph_loss = torch.zeros(n_graphs, device=logits.device)
+        graph_count = torch.zeros(n_graphs, device=logits.device)
+        graph_loss.scatter_add_(0, edge_graph, raw)
+        graph_count.scatter_add_(0, edge_graph, torch.ones_like(raw))
+        return (graph_loss / graph_count.clamp(min=1)).mean()
+
+
 def _build_criterion(
     case: Case,
     pos_weight: float | None = None,
@@ -191,6 +227,8 @@ def _build_criterion(
     """Build the loss function for a given training case."""
     if case == "logical_head":
         return nn.BCEWithLogitsLoss()
+    if case == "tn_teacher":
+        return _SoftTeacherLoss()
     pw = torch.tensor([pos_weight], device=device) if pos_weight is not None else None
     return _GraphNormalizedBCE(pos_weight=pw)
 
@@ -293,6 +331,8 @@ class Trainer:
             val_ds = Subset(val_ds, range(min(self.cfg.max_samples // 5, len(val_ds))))
 
         pin = self.device.type == "cuda"
+        persistent = self.cfg.num_workers > 0
+        prefetch = 2 if self.cfg.num_workers > 0 else None
         self.train_loader = DataLoader(
             train_ds,
             batch_size=self.cfg.batch_size,
@@ -300,6 +340,8 @@ class Trainer:
             drop_last=True,
             num_workers=self.cfg.num_workers,
             pin_memory=pin,
+            persistent_workers=persistent,
+            prefetch_factor=prefetch,
         )
         self.val_loader = DataLoader(
             val_ds,
@@ -307,6 +349,8 @@ class Trainer:
             shuffle=False,
             num_workers=self.cfg.num_workers,
             pin_memory=pin,
+            persistent_workers=persistent,
+            prefetch_factor=prefetch,
         )
         logger.info(
             "Train: %d samples, Val: %d samples",
@@ -315,13 +359,25 @@ class Trainer:
         )
 
     def _setup_model(self) -> None:
-        """Build model and move to device."""
+        """Build model, set compute backend, and move to device."""
+        from gnn.models.ops import set_backend
+
+        set_backend(self.cfg.backend)
+
         self.model = build_model(
             self.cfg.case,
             hidden_dim=self.cfg.hidden_dim,
             num_layers=self.cfg.num_layers,
             dropout=self.cfg.dropout,
         ).to(self.device)
+
+        if self.cfg.backend == "compiled" and self.device.type == "cuda":
+            self.model = torch.compile(
+                self.model,
+                mode=self.cfg.compile_mode,
+                fullgraph=False,  # GNN scatter ops cause graph breaks
+            )
+            logger.info("torch.compile enabled (mode=%s)", self.cfg.compile_mode)
 
         num_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         logger.info("Model: %d trainable parameters", num_params)
@@ -361,7 +417,7 @@ class Trainer:
     def _setup_criterion(self) -> None:
         """Build loss function, estimating pos_weight if needed."""
         pos_weight = self.cfg.edge_pos_weight
-        if self.cfg.case != "logical_head" and pos_weight is None:
+        if self.cfg.case not in ("logical_head", "tn_teacher") and pos_weight is None:
             pos_weight = _estimate_edge_pos_weight(self.train_loader)
 
         self.criterion = _build_criterion(
