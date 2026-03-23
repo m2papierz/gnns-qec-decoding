@@ -58,10 +58,6 @@ class TNDecoder(BaseDecoder):
         device_id: int = 0,
     ) -> None:
         super().__init__(config)
-        if not _check_cuquantum():
-            raise ImportError(
-                "cuquantum not installed. Install with: pip install cuquantum-cu12"
-            )
 
         self.und_pairs = und_pairs
         self.edge_probs = np.clip(edge_probs.astype(np.float64), 1e-10, 1.0 - 1e-10)
@@ -76,8 +72,22 @@ class TNDecoder(BaseDecoder):
                 if node < config.num_detectors:
                     self._detector_edges.setdefault(node, []).append(eid)
 
-        # Build einsum expression and base tensors
+        # Lazily built when exact contraction is requested
+        self._tn_built = False
+        self._tensors: list = []
+        self._subscripts: List[str] = []
+        self._idx_map: Dict[int, str] = {}
+
+    def _ensure_tn(self) -> None:
+        """Build TN factor graph on first use (requires cuquantum)."""
+        if self._tn_built:
+            return
+        if not _check_cuquantum():
+            raise ImportError(
+                "cuquantum not installed. Install with: pip install cuquantum-cu12"
+            )
         self._tensors, self._subscripts, self._idx_map = self._build_tn()
+        self._tn_built = True
 
     def _build_tn(
         self,
@@ -132,6 +142,7 @@ class TNDecoder(BaseDecoder):
 
         Returns conditioned tensors and updated subscript list.
         """
+        self._ensure_tn()
         import cupy as cp
 
         conditioned: list = []
@@ -275,7 +286,9 @@ class TNSoftLabelGenerator:
         num_und = self._decoder.num_und
         soft_labels = np.empty((n_samples, num_und), dtype=np.float32)
 
-        for i in range(n_samples):
-            soft_labels[i] = self._decoder._compute_edge_marginals(syndromes[i])
+        for off in range(0, n_samples, chunk_size):
+            end = min(off + chunk_size, n_samples)
+            for i in range(off, end):
+                soft_labels[i] = self._decoder._compute_edge_marginals(syndromes[i])
 
         return soft_labels

@@ -42,8 +42,9 @@ class MWPMDecoder(BaseDecoder):
     ) -> pymatching.Matching:
         """Construct a ``pymatching.Matching`` graph."""
         m = pymatching.Matching()
+        num_edges = und_pairs.shape[0]
 
-        for eid in range(und_pairs.shape[0]):
+        for eid in range(num_edges):
             u, v = int(und_pairs[eid, 0]), int(und_pairs[eid, 1])
             w = float(max(weights[eid], 1e-8))
 
@@ -53,10 +54,11 @@ class MWPMDecoder(BaseDecoder):
             ):
                 det = v if u == self.config.boundary_node else u
                 if 0 <= det < self.config.num_detectors:
-                    m.add_boundary_edge(det, weight=w)
+                    m.add_boundary_edge(det, fault_ids={eid}, weight=w)
             elif u < self.config.num_detectors and v < self.config.num_detectors:
-                m.add_edge(u, v, weight=w)
+                m.add_edge(u, v, fault_ids={eid}, weight=w)
 
+        m.ensure_num_fault_ids(num_edges)
         return m
 
     def decode(self, syndrome: np.ndarray) -> np.ndarray:
