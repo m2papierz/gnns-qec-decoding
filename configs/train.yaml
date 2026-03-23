@@ -41,7 +41,7 @@ max_grad_norm: 1.0
 # Early stopping: patience counts validation runs, not epochs.
 # With val_every: 5 and patience: 25, the model must improve within 125 epochs.
 # Set patience to 0 to disable early stopping.
-patience: 0
+patience: 50
 val_every: 5
 
 # Reproducibility
