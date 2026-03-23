@@ -39,7 +39,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--decoder",
         type=str,
         default="mwpm",
-        choices=["mwpm"],
+        choices=["mwpm", "tensor_network"],
         help="Decoder for edge-based cases",
     )
     parser.add_argument("--baseline", type=Path, default=None)

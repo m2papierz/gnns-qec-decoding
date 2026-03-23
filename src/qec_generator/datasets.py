@@ -264,6 +264,73 @@ def _write_mwpm_labels(
     save_npy(out_path, packed, overwrite=True)
 
 
+def _write_tn_soft_labels(
+    shard_dir: Path,
+    graph_dir: Path,
+    split: str,
+    num_detectors: int,
+    num_observables: int,
+    has_boundary: bool,
+    overwrite: bool,
+) -> None:
+    """Generate soft TN marginals as teacher labels.
+
+    Parameters
+    ----------
+    shard_dir : Path
+        Shard directory containing split data.
+    graph_dir : Path
+        Graph directory with edge_index and edge_attr.
+    split : str
+        Split name.
+    num_detectors : int
+        Number of detector nodes.
+    num_observables : int
+        Number of logical observables.
+    has_boundary : bool
+        Whether graph has boundary node.
+    overwrite : bool
+        Overwrite existing labels.
+    """
+    out_path = shard_dir / f"{split}_tn_soft_labels.npy"
+    if out_path.exists() and not overwrite:
+        logger.debug("TN soft labels already exist for split '%s'", split)
+        return
+
+    from decoders.base import DecoderConfig
+    from decoders.tensor_network import TNSoftLabelGenerator
+
+    edge_index = np.load(graph_dir / "edge_index.npy")
+    edge_attr = np.load(graph_dir / "edge_attr.npy")
+
+    und_pairs, dir_to_undir = undirected_edges(edge_index)
+
+    # Get error_prob for each undirected edge (from first directed edge)
+    first_idx = np.full(und_pairs.shape[0], -1, dtype=np.int64)
+    for e, uid in enumerate(dir_to_undir):
+        if first_idx[uid] == -1:
+            first_idx[uid] = e
+    edge_probs = edge_attr[first_idx, 0]
+
+    config = DecoderConfig(
+        num_detectors=num_detectors,
+        num_observables=num_observables,
+        has_boundary=has_boundary,
+        boundary_node=num_detectors if has_boundary else None,
+    )
+    generator = TNSoftLabelGenerator(config, und_pairs, edge_probs)
+
+    syndrome = np.load(shard_dir / f"{split}_syndrome.npy")
+    soft_labels = generator.generate_soft_labels(syndrome)
+
+    save_npy(out_path, soft_labels, overwrite=True)
+
+    # Ensure dir_to_undir mapping exists (shared with MWPM)
+    mwpm_dir = shard_dir / "mwpm"
+    mwpm_dir.mkdir(parents=True, exist_ok=True)
+    save_npy(mwpm_dir / "dir_to_undir.npy", dir_to_undir, overwrite)
+
+
 def generate_datasets(
     cfg: Config,
     cases: tuple[Case, ...] = CASES,
@@ -381,6 +448,19 @@ def generate_datasets(
                         split,
                         cfg.chunk_size,
                         stats["num_detectors"],
+                        graph_meta.get("has_boundary", False),
+                        overwrite,
+                    )
+
+            # TN soft labels
+            if case == "tn_teacher":
+                for split, stats in split_stats.items():
+                    _write_tn_soft_labels(
+                        shard_dir,
+                        graph_dir,
+                        split,
+                        stats["num_detectors"],
+                        stats.get("num_observables", 1),
                         graph_meta.get("has_boundary", False),
                         overwrite,
                     )

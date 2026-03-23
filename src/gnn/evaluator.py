@@ -158,6 +158,18 @@ class Evaluator:
                 dir_to_undir,
                 num_undirected,
             )
+        if self.decoder_type == "tensor_network":
+            # Convert GNN logits => probabilities for TN decoder
+            from decoders.mwpm import (
+                _directed_to_undirected_logits,
+            )
+            from decoders.tensor_network import TNDecoder
+
+            und_logits = _directed_to_undirected_logits(
+                directed_logits, dir_to_undir, num_undirected
+            )
+            edge_probs = 1.0 / (1.0 + np.exp(-und_logits))
+            return TNDecoder(config, und_pairs, edge_probs)
         raise ValueError(f"Unknown decoder type: {self.decoder_type!r}")
 
     def _load_settings(self) -> List[_SettingMeta]:
