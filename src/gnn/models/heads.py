@@ -211,7 +211,7 @@ def build_model(
 
     Parameters
     ----------
-    case : {"logical_head", "mwpm_teacher", "hybrid"}
+    case : {"logical_head", "mwpm_teacher", "hybrid", "tn_teacher"}
         Training case.  Determines which head is attached.
     node_dim, edge_dim, hidden_dim, num_layers, dropout
         Encoder architecture parameters.
@@ -236,7 +236,7 @@ def build_model(
             num_observables=num_observables,
             dropout=dropout,
         )
-    elif case in ("mwpm_teacher", "hybrid"):
+    elif case in ("mwpm_teacher", "hybrid", "tn_teacher"):
         head = EdgeHead(
             hidden_dim=hidden_dim,
             dropout=dropout,
@@ -244,7 +244,8 @@ def build_model(
     else:
         raise ValueError(
             f"Unknown case {case!r}. "
-            f"Expected one of: 'logical_head', 'mwpm_teacher', 'hybrid'"
+            f"Expected one of: 'logical_head', 'mwpm_teacher', 'hybrid', "
+            f"'tn_teacher'"
         )
 
     return QECDecoder(encoder, head)
