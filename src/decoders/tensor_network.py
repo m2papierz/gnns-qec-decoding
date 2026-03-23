@@ -111,6 +111,12 @@ class TNDecoder(BaseDecoder):
         import cupy as cp
         from cuquantum.tensornet import contract
 
+        # cuTensorNet logs verbose path optimization to root logger at INFO.
+        # Temporarily raise root level to suppress during contraction loop.
+        _root = logging.getLogger()
+        _prev_level = _root.level
+        _root.setLevel(max(_prev_level, logging.WARNING))
+
         with cp.cuda.Device(self.device_id):
             # Prior tensors: one per edge variable
             priors = []
@@ -154,6 +160,7 @@ class TNDecoder(BaseDecoder):
                     # Syndrome inconsistent with graph — use prior
                     marginals[target] = float(self.edge_probs[target])
 
+        _root.setLevel(_prev_level)
         return marginals.astype(np.float32)
 
     def decode(self, syndrome: np.ndarray) -> np.ndarray:
