@@ -15,10 +15,10 @@ An end-to-end project on decoding topological quantum error-correcting codes wit
 > - [x] Pluggable decoder interface (`decoders/`)
 > - [x] Custom CUDA kernels for hot paths (symmetric edge features, fused norm+residual, graph-normalized BCE)
 > - [x] cuTensorNet exact contraction for TN decoder (with heuristic fallback)
+> - [x] TensorRT deployment path via ``torch.compile`` + ``torch_tensorrt`` backend
 >
 > ### In progress / experimental
 > - [ ] GNN `tn_teacher` — tensor-network soft labels as training targets
-> - [ ] TensorRT deployment path for low-latency inference
 > - [ ] Benchmark harness (latency, throughput, memory across backends)
 >
 > ### Benchmarks (planned)
@@ -136,3 +136,28 @@ uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \
 
 See [`src/gnn/README.md`](src/gnn/README.md) for architecture details,
 hyperparameters, all four training modes, and evaluation protocols.
+
+## Deployment and benchmarking
+
+Benchmark inference across backends (PyTorch, torch.compile, TensorRT):
+
+```bash
+# All backends (requires torch-tensorrt for TRT)
+uv run scripts/export_trt.py --checkpoint outputs/runs/logical_head/best.pt
+
+# PyTorch and compiled only
+uv run scripts/export_trt.py --checkpoint outputs/runs/logical_head/best.pt \
+    --backends pytorch compiled
+
+# Custom batch size
+uv run scripts/export_trt.py --checkpoint outputs/runs/mwpm_teacher/best.pt \
+    --n-graphs 8 --n-iters 200
+```
+
+The TensorRT backend uses `torch.compile` with the `torch_tensorrt` backend,
+which automatically partitions the GNN: dense subgraphs (MLP, Linear,
+LayerNorm) are lowered to TRT engines, while sparse ops (scatter, gather)
+remain in PyTorch. Requires `pip install torch-tensorrt`.
+
+See [`src/deploy/README.md`](src/deploy/README.md) for Python API,
+benchmark output format, and details on TRT graph partitioning.
