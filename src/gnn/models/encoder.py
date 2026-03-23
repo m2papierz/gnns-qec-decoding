@@ -14,6 +14,8 @@ import torch
 import torch.nn as nn
 from torch_geometric.nn import GINEConv, LayerNorm
 
+from gnn.models.ops import fused_norm_residual_dropout, symmetric_edge_features
+
 
 class _GINEBlock(nn.Module):
     """
@@ -85,19 +87,27 @@ class _GINEBlock(nn.Module):
         if edge_h is not None:
             e = e + edge_h
 
+        # Node update: GINEConv + norm/residual
         residual = x
         x = self.conv(x, edge_index, e)
-        x = self.norm(x)
-        x = self.dropout(x)
-        x = x + residual
-
-        h_src = x[edge_index[0]]
-        h_dst = x[edge_index[1]]
-        e_new = self.edge_update(
-            torch.cat([h_src + h_dst, (h_src - h_dst).abs(), e], dim=-1)
+        x = fused_norm_residual_dropout(
+            x,
+            residual,
+            self.norm,
+            self.dropout,
+            self.training,
         )
-        e_new = self.edge_norm(e_new)
-        e_new = self.dropout(e_new) + e
+
+        # Edge update: symmetric features + MLP + norm/residual
+        e_input = symmetric_edge_features(x, edge_index, e)
+        e_new = self.edge_update(e_input)
+        e_new = fused_norm_residual_dropout(
+            e_new,
+            e,
+            self.edge_norm,
+            self.dropout,
+            self.training,
+        )
 
         return x, e_new
 

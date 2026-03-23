@@ -23,6 +23,7 @@ from torch_geometric.utils import softmax
 
 from constants import Case
 from gnn.models.encoder import DetectorGraphEncoder
+from gnn.models.ops import edge_mean_pool, symmetric_edge_features
 
 
 class LogicalHead(nn.Module):
@@ -94,13 +95,8 @@ class LogicalHead(nn.Module):
         g_max = global_max_pool(h, batch)
 
         edge_batch = batch[edge_index[0]]
-        g_edge = global_add_pool(edge_h, edge_batch)
         n_graphs = int(batch.max()) + 1
-        edge_counts = torch.zeros(n_graphs, device=h.device)
-        edge_counts.scatter_add_(
-            0, edge_batch, torch.ones(edge_batch.shape[0], device=h.device)
-        )
-        g_edge = g_edge / edge_counts.clamp(min=1).unsqueeze(-1)
+        g_edge = edge_mean_pool(edge_h, edge_batch, n_graphs)
 
         return self.mlp(torch.cat([g_attn, g_max, g_edge], dim=-1))
 
@@ -156,9 +152,7 @@ class EdgeHead(nn.Module):
         -------
         Tensor, shape (E_total,)
         """
-        h_u = h[edge_index[0]]
-        h_v = h[edge_index[1]]
-        inp = torch.cat([h_u + h_v, (h_u - h_v).abs(), edge_h], dim=-1)
+        inp = symmetric_edge_features(h, edge_index, edge_h)
         return self.mlp(inp).squeeze(-1)
 
 
