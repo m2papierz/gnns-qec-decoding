@@ -63,6 +63,29 @@ def _setup_tensorrt_libs() -> None:
         logger.debug("Added %s to LD_LIBRARY_PATH", trt_str)
 
 
+def _deregister_scatter_reduce_decomp() -> None:
+    """Remove torch_tensorrt's broken scatter_reduce decomposition.
+
+    ``torch_tensorrt`` registers a custom decomposition for
+    ``aten.scatter_reduce.two`` that raises ``AssertionError`` when
+    ``include_self=False`` — a pattern used by PyG's ``softmax``.
+    Removing the decomposition lets ``scatter_reduce`` stay as an
+    opaque ATen op during AOT tracing so the TRT partitioner routes
+    it to a PyTorch subgraph instead of crashing.
+    """
+    try:
+        from torch_tensorrt.dynamo.lowering._decompositions import (
+            TORCH_TRT_DECOMPOSITIONS,
+        )
+
+        key = torch.ops.aten.scatter_reduce.two
+        if key in TORCH_TRT_DECOMPOSITIONS:
+            del TORCH_TRT_DECOMPOSITIONS[key]
+            logger.debug("Removed scatter_reduce decomposition from TRT table")
+    except (ImportError, AttributeError) as exc:
+        logger.debug("Could not deregister scatter_reduce decomp: %s", exc)
+
+
 class InferenceBackend(Enum):
     """Available inference backends."""
 
@@ -149,6 +172,14 @@ class InferenceEngine:
 
             dynamo.config.assume_static_by_default = True
 
+            # torch_tensorrt registers a custom decomposition for
+            # scatter_reduce that doesn't support include_self=False,
+            # which PyG's softmax uses internally. Removing it lets
+            # the op stay opaque during AOT tracing so the partitioner
+            # correctly routes it to the PyTorch subgraph while dense
+            # ops (Linear, LayerNorm, MLP) go to TRT engines.
+            _deregister_scatter_reduce_decomp()
+
             precisions = {torch.float32}
             if self.precision == "fp16":
                 precisions.add(torch.float16)
@@ -161,7 +192,7 @@ class InferenceEngine:
                     "enabled_precisions": precisions,
                     "min_block_size": min_block_size,
                     "use_fp32_acc": True,
-                    "pass_through_build_failures": True,
+                    "pass_through_build_failures": False,
                 },
             )
             logger.info(
