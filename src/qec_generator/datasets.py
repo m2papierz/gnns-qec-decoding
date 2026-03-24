@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import logging
-import math
 from pathlib import Path
 from typing import Any, Dict
 
 import numpy as np
-import pymatching
 from tqdm import tqdm
 
-from constants import CASES, MWPM_BITORDER, MWPM_LABEL, SPLITS, Case
+from constants import CASES, SPLITS, Case
 from qec_generator.config import Config
 from qec_generator.utils import read_json, save_json, save_npy, undirected_edges
 
@@ -129,50 +127,7 @@ def _copy_split(
     }
 
 
-def _build_teacher_matching(
-    und_pairs: np.ndarray,
-    und_attr: np.ndarray,
-    num_detectors: int,
-    boundary_node: int | None,
-) -> pymatching.Matching:
-    """
-    Build PyMatching graph with unique fault IDs per undirected edge.
-
-    Parameters
-    ----------
-    und_pairs : ndarray, shape (U, 2)
-        Undirected edge pairs.
-    und_attr : ndarray, shape (U, 2)
-        Edge attributes [error_prob, weight].
-    num_detectors : int
-        Number of detector nodes.
-    boundary_node : int or None
-        Index of virtual boundary node, or None.
-
-    Returns
-    -------
-    pymatching.Matching
-        Configured matching decoder.
-    """
-    m = pymatching.Matching()
-    num_edges = und_pairs.shape[0]
-
-    for eid in range(num_edges):
-        u, v = int(und_pairs[eid, 0]), int(und_pairs[eid, 1])
-        p, w = float(und_attr[eid, 0]), float(und_attr[eid, 1])
-
-        if boundary_node is not None and boundary_node in (u, v):
-            det = v if u == boundary_node else u
-            if 0 <= det < num_detectors:
-                m.add_boundary_edge(det, fault_ids={eid}, weight=w, error_probability=p)
-        elif u < num_detectors and v < num_detectors:
-            m.add_edge(u, v, fault_ids={eid}, weight=w, error_probability=p)
-
-    m.ensure_num_fault_ids(num_edges)
-    return m
-
-
-def _write_mwpm_labels(
+def _write_bp_soft_labels(
     shard_dir: Path,
     graph_dir: Path,
     split: str,
@@ -182,28 +137,36 @@ def _write_mwpm_labels(
     overwrite: bool,
 ) -> None:
     """
-    Generate packed MWPM teacher labels for one split.
+    Generate continuous BP marginal soft labels for one split.
+
+    Runs sum-product belief propagation per syndrome shot to produce
+    per-undirected-edge posterior marginals ``P(e=1 | syndrome)``.
+
+    Also saves the ``dir_to_undir`` mapping and metadata needed by the
+    dataset loader and evaluation pipeline.
 
     Parameters
     ----------
     shard_dir : Path
         Shard directory containing split data.
     graph_dir : Path
-        Graph directory with edge_index and edge_attr.
+        Graph directory with ``edge_index.npy`` and ``edge_attr.npy``.
     split : str
         Split name.
     chunk_size : int
-        Batch size for MWPM decoding.
+        Batch size for progress reporting.
     num_detectors : int
         Number of detector nodes.
     has_boundary : bool
-        Whether graph has boundary node.
+        Whether graph has a boundary node.
     overwrite : bool
         Overwrite existing labels.
     """
-    out_path = shard_dir / f"{split}_mwpm_edge_selected_packed.npy"
+    from qec_generator.bp import compute_bp_marginals
+
+    out_path = shard_dir / f"{split}_bp_soft_labels.npy"
     if out_path.exists() and not overwrite:
-        logger.debug("MWPM labels already exist for split '%s'", split)
+        logger.debug("BP soft labels already exist for split '%s'", split)
         return
 
     edge_index = np.load(graph_dir / "edge_index.npy")
@@ -212,21 +175,19 @@ def _write_mwpm_labels(
     und_pairs, dir_to_undir = undirected_edges(edge_index)
     num_und = und_pairs.shape[0]
 
-    # Get undirected attributes (first occurrence)
+    # Get undirected edge probabilities (first directed occurrence)
     first_idx = np.full(num_und, -1, dtype=np.int64)
     for e, uid in enumerate(dir_to_undir):
         if first_idx[uid] == -1:
             first_idx[uid] = e
-    und_attr = edge_attr[first_idx]
+    edge_probs = edge_attr[first_idx, 0].astype(np.float64)
 
-    boundary_node = num_detectors if has_boundary else None
-    teacher = _build_teacher_matching(und_pairs, und_attr, num_detectors, boundary_node)
-
-    # Save MWPM metadata
+    # Save edge mapping metadata (shared with evaluation pipeline)
     mwpm_dir = shard_dir / "mwpm"
     mwpm_dir.mkdir(parents=True, exist_ok=True)
 
     endpoints = und_pairs.astype(np.int32)
+    boundary_node = num_detectors if has_boundary else None
     if has_boundary and boundary_node is not None:
         endpoints = endpoints.copy()
         endpoints[endpoints == boundary_node] = -1
@@ -237,31 +198,33 @@ def _write_mwpm_labels(
         mwpm_dir / "teacher_meta.json",
         {
             "num_undirected_edges": num_und,
-            "bitorder": MWPM_BITORDER,
-            "label": MWPM_LABEL,
+            "label_type": "bp_marginals",
         },
         overwrite,
     )
 
-    # Decode syndromes in batches
+    # Compute BP marginals per syndrome shot
     syndrome = np.load(shard_dir / f"{split}_syndrome.npy", mmap_mode="r")
     n_samples = syndrome.shape[0]
     if syndrome.shape[1] != num_detectors:
         raise ValueError(
-            f"MWPM label gen: syndrome width {syndrome.shape[1]} != "
+            f"BP label gen: syndrome width {syndrome.shape[1]} != "
             f"num_detectors {num_detectors} for split '{split}'"
         )
-    packed_cols = math.ceil(num_und / 8)
-    packed = np.empty((n_samples, packed_cols), dtype=np.uint8)
 
-    for off in tqdm(range(0, n_samples, chunk_size), desc=f"MWPM {split}", leave=False):
-        batch = np.asarray(syndrome[off : off + chunk_size], dtype=np.uint8)
-        selected = teacher.decode_batch(batch).astype(np.uint8)[:, :num_und]
-        packed[off : off + selected.shape[0]] = np.packbits(
-            selected, axis=1, bitorder=MWPM_BITORDER
-        )
+    soft_labels = np.empty((n_samples, num_und), dtype=np.float32)
+    for off in tqdm(range(0, n_samples, chunk_size), desc=f"BP {split}", leave=False):
+        end = min(off + chunk_size, n_samples)
+        for i in range(off, end):
+            syn = np.asarray(syndrome[i], dtype=np.uint8)
+            soft_labels[i] = compute_bp_marginals(
+                und_pairs,
+                edge_probs,
+                num_detectors,
+                syn,
+            )
 
-    save_npy(out_path, packed, overwrite=True)
+    save_npy(out_path, soft_labels, overwrite=True)
 
 
 def generate_datasets(
@@ -280,8 +243,8 @@ def generate_datasets(
                     edge_index.npy, edge_attr.npy, graph_meta.json
                 {split}_syndrome.npy
                 {split}_logical.npy
-                {split}_mwpm_edge_selected_packed.npy
-                mwpm/
+                {split}_bp_soft_labels.npy          # edge case only
+                mwpm/                                # edge case only
                     undirected_edge_endpoints.npy
                     dir_to_undir.npy
                     teacher_meta.json
@@ -372,10 +335,10 @@ def generate_datasets(
                     logger.warning("Skipping split '%s': %s", split, e)
                     continue
 
-            # MWPM labels
+            # BP soft labels for edge case
             if case == "edge":
                 for split, stats in split_stats.items():
-                    _write_mwpm_labels(
+                    _write_bp_soft_labels(
                         shard_dir,
                         graph_dir,
                         split,

@@ -81,7 +81,7 @@ class MixedSurfaceCodeDataset(Dataset):
     y : FloatTensor
         Target depends on *case*:
         ``"direct"`` => ``(num_observables,)``;
-        ``"edge"`` => ``(E,)`` binary directed edge labels.
+        ``"edge"`` => ``(E,)`` float BP marginals per directed edge.
     logical : FloatTensor, shape ``(num_observables,)``
         Ground-truth observable flip (always present for eval).
     setting_id : LongTensor, scalar
@@ -137,7 +137,7 @@ class MixedSurfaceCodeDataset(Dataset):
         # Caches keyed by setting_id
         self._graph_cache: Dict[int, Tuple[torch.Tensor, torch.Tensor]] = {}
         self._split_cache: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
-        self._mwpm_cache: Dict[int, Tuple[np.ndarray, np.ndarray, int]] = {}
+        self._bp_cache: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
 
     def __len__(self) -> int:
         return int(self._setting_id.shape[0])
@@ -173,21 +173,17 @@ class MixedSurfaceCodeDataset(Dataset):
         self._split_cache[sid] = (syndrome, logical)
         return syndrome, logical
 
-    def _get_mwpm_arrays(self, sid: int) -> Tuple[np.ndarray, np.ndarray, int]:
-        """Return cached MWPM labels ``(packed, dir_to_undir, num_und)`` for *sid*."""
-        if sid in self._mwpm_cache:
-            return self._mwpm_cache[sid]
+    def _get_bp_arrays(self, sid: int) -> Tuple[np.ndarray, np.ndarray]:
+        """Return cached BP soft labels ``(marginals, dir_to_undir)`` for *sid*."""
+        if sid in self._bp_cache:
+            return self._bp_cache[sid]
 
         sdir = self._setting_dir(sid)
-        packed = np.load(
-            sdir / f"{self.split}_mwpm_edge_selected_packed.npy", mmap_mode="r"
-        )
+        marginals = np.load(sdir / f"{self.split}_bp_soft_labels.npy", mmap_mode="r")
         dir_to_undir = np.load(sdir / "mwpm" / "dir_to_undir.npy")
-        meta = read_json(sdir / "mwpm" / "teacher_meta.json")
-        num_und = int(meta["num_undirected_edges"])
 
-        self._mwpm_cache[sid] = (packed, dir_to_undir, num_und)
-        return packed, dir_to_undir, num_und
+        self._bp_cache[sid] = (marginals, dir_to_undir)
+        return marginals, dir_to_undir
 
     def __getitem__(self, idx: int) -> Data:
         sid = int(self._setting_id[idx])
@@ -212,10 +208,10 @@ class MixedSurfaceCodeDataset(Dataset):
         if self.case == "direct":
             y = logical
         else:
-            # edge: bit-packed binary MWPM edge labels
-            packed, dir_to_undir, num_und = self._get_mwpm_arrays(sid)
-            und = _unpack_bits_row(np.asarray(packed[shot], dtype=np.uint8), num_und)
-            y = torch.from_numpy(und[dir_to_undir].astype(np.float32, copy=False))
+            # edge: continuous BP marginals expanded to directed edges
+            marginals, dir_to_undir = self._get_bp_arrays(sid)
+            und_marginals = np.asarray(marginals[shot], dtype=np.float32)
+            y = torch.from_numpy(und_marginals[dir_to_undir])
 
         return Data(
             x=x,

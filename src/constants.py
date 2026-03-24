@@ -18,10 +18,6 @@ JSON_EXT = ".json"
 STIM_EXT = ".stim"
 DEM_EXT = ".dem"
 
-# MWPM configuration
-MWPM_BITORDER = "little"
-MWPM_LABEL = "edge_selected"
-
 # Default values
 DEFAULT_CHUNK_SIZE = 10_000
 DEFAULT_COMPRESS = True

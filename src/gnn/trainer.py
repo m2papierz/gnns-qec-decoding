@@ -27,7 +27,6 @@ from torch_geometric.loader import DataLoader
 from constants import Case
 from gnn.dataset import MixedSurfaceCodeDataset
 from gnn.models.heads import QECDecoder, build_model
-from gnn.models.ops import graph_normalized_bce
 
 
 logger = logging.getLogger(__name__)
@@ -157,24 +156,17 @@ def seed_everything(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-class _GraphNormalizedBCE(nn.Module):
+class _SoftTeacherLoss(nn.Module):
     """
-    Per-graph normalized BCE with logits for edge predictions.
+    Graph-normalized MSE between sigmoid(logits) and soft teacher marginals.
 
-    Computes per-edge BCE, averages within each graph, then averages
-    across graphs.  Prevents larger graphs from dominating the gradient
-    in mixed-distance batches.
+    For each edge, computes ``(sigma(logit) - target)^2``, averages within each
+    graph, then averages across graphs.  This prevents larger graphs from
+    dominating the gradient in mixed-distance batches.
 
-    Delegates to :func:`gnn.models.ops.graph_normalized_bce` which
-    dispatches to the active compute backend (PyTorch / CUDA).
+    Used for the ``edge`` training case where targets are continuous BP
+    marginals in ``[0, 1]``.
     """
-
-    def __init__(self, pos_weight: torch.Tensor | None = None) -> None:
-        super().__init__()
-        if pos_weight is not None:
-            self.register_buffer("pos_weight", pos_weight)
-        else:
-            self.pos_weight = None
 
     def forward(
         self,
@@ -182,62 +174,25 @@ class _GraphNormalizedBCE(nn.Module):
         target: torch.Tensor,
         batch: Batch,
     ) -> torch.Tensor:
+        pred = torch.sigmoid(logits)
+        per_edge = (pred - target) ** 2
+
         edge_graph = batch.batch[batch.edge_index[0]]
         n_graphs = int(batch.batch.max()) + 1
-        return graph_normalized_bce(
-            logits,
-            target,
-            edge_graph,
-            n_graphs,
-            self.pos_weight,
-        )
+
+        graph_loss = torch.zeros(n_graphs, device=logits.device)
+        graph_count = torch.zeros(n_graphs, device=logits.device)
+        graph_loss.scatter_add_(0, edge_graph, per_edge)
+        graph_count.scatter_add_(0, edge_graph, torch.ones_like(per_edge))
+        return (graph_loss / graph_count.clamp(min=1)).mean()
 
 
-def _build_criterion(
-    case: Case,
-    pos_weight: float | None = None,
-    device: torch.device | None = None,
-) -> nn.Module:
+def _build_criterion(case: Case) -> nn.Module:
     """Build the loss function for a given training case."""
     if case == "direct":
         return nn.BCEWithLogitsLoss()
-    pw = torch.tensor([pos_weight], device=device) if pos_weight is not None else None
-    return _GraphNormalizedBCE(pos_weight=pw)
-
-
-def _estimate_edge_pos_weight(
-    loader: DataLoader,
-    max_batches: int = 50,
-) -> float:
-    """
-    Estimate positive-class weight for edge BCE from training data.
-
-    Returns ``num_neg / num_pos``, clamped to ``[1.0, 200.0]``.
-    """
-    total_pos = 0
-    total_neg = 0
-
-    for i, batch in enumerate(loader):
-        if i >= max_batches:
-            break
-        pos = int(batch.y.sum().item())
-        total_pos += pos
-        total_neg += int(batch.y.numel()) - pos
-
-    if total_pos == 0:
-        logger.warning("No positive edge labels found; using pos_weight=10.0")
-        return 10.0
-
-    raw = total_neg / total_pos
-    clamped = float(np.clip(raw, 1.0, 200.0))
-    logger.info(
-        "Edge label balance: %d pos / %d neg → raw=%.1f, pos_weight=%.1f",
-        total_pos,
-        total_neg,
-        raw,
-        clamped,
-    )
-    return clamped
+    # edge case: graph-normalized MSE against BP soft labels
+    return _SoftTeacherLoss()
 
 
 class Trainer:
@@ -380,23 +335,15 @@ class Trainer:
             milestones=[warmup_epochs],
         )
         logger.info(
-            "Scheduler: LinearWarmup(%dep) → CosineAnnealing(T_max=%d, eta_min=%.1e)",
+            "Scheduler: LinearWarmup(%dep) => CosineAnnealing(T_max=%d, eta_min=%.1e)",
             warmup_epochs,
             self.cfg.epochs - warmup_epochs,
             eta_min,
         )
 
     def _setup_criterion(self) -> None:
-        """Build loss function, estimating pos_weight if needed."""
-        pos_weight = self.cfg.edge_pos_weight
-        if self.cfg.case != "direct" and pos_weight is None:
-            pos_weight = _estimate_edge_pos_weight(self.train_loader)
-
-        self.criterion = _build_criterion(
-            self.cfg.case,
-            pos_weight=pos_weight,
-            device=self.device,
-        )
+        """Build loss function."""
+        self.criterion = _build_criterion(self.cfg.case)
 
     def _setup_amp(self) -> None:
         """Configure automatic mixed precision."""
@@ -513,8 +460,7 @@ class Trainer:
         Returns
         -------
         dict
-            Validation metrics: ``loss`` always; ``ler`` for direct;
-            ``edge_auc`` for edge cases.
+            Validation metrics: ``loss`` always; ``ler`` for direct.
         """
         self.model.eval()
         use_amp = self.device.type == "cuda"
@@ -523,8 +469,6 @@ class Trainer:
         num_batches = 0
         total_graphs = 0
         total_errors = 0
-        all_logits: list[np.ndarray] = []
-        all_targets: list[np.ndarray] = []
 
         for batch in self.val_loader:
             batch = batch.to(self.device)
@@ -544,9 +488,6 @@ class Trainer:
                 target_2d = batch.y.view_as(pred)
                 total_graphs += pred.shape[0]
                 total_errors += int((pred != target_2d).any(dim=1).sum().item())
-            else:
-                all_logits.append(logits.cpu().numpy())
-                all_targets.append(batch.y.cpu().numpy())
 
             total_loss += loss.item()
             num_batches += 1
@@ -556,10 +497,6 @@ class Trainer:
         }
         if self.cfg.case == "direct" and total_graphs > 0:
             metrics["ler"] = total_errors / total_graphs
-        if self.cfg.case != "direct" and all_logits:
-            scores = np.concatenate(all_logits)
-            targets = np.concatenate(all_targets)
-            metrics["edge_auc"] = _roc_auc_score(targets, scores)
 
         return metrics
 
@@ -767,8 +704,6 @@ def _format_metrics(metrics: Dict[str, float]) -> str:
     for k, v in metrics.items():
         if k == "ler":
             parts.append(f"LER={v:.4f}")
-        elif k == "edge_auc":
-            parts.append(f"AUC={v:.4f}")
         else:
             parts.append(f"{k}={v:.4f}")
     return "  ".join(parts)
