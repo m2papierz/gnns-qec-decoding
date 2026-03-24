@@ -73,7 +73,7 @@ cfg = Config.from_yaml("configs/data_generation.yaml")
 generate_raw_data(cfg)
 
 # Step 2: package for ML
-generate_datasets(cfg, cases=("logical_head", "mwpm_teacher", "hybrid"))
+generate_datasets(cfg, cases=("logical_head", "hybrid"))
 ```
 
 ## Configuration (YAML)
@@ -144,8 +144,8 @@ data/datasets/{case}/
 │       │   └── graph_meta.json
 │       ├── {split}_syndrome.npy
 │       ├── {split}_logical.npy
-│       ├── {split}_mwpm_edge_selected_packed.npy   # mwpm_teacher / hybrid only
-│       └── mwpm/                                    # mwpm_teacher / hybrid only
+│       ├── {split}_mwpm_edge_selected_packed.npy   # hybrid only
+│       └── mwpm/                                    # hybrid only
 │           ├── undirected_edge_endpoints.npy
 │           ├── dir_to_undir.npy
 │           └── teacher_meta.json
@@ -162,8 +162,7 @@ All cases share identical raw samples — only the supervision differs.
 | Case | Labels included | Purpose |
 |---|---|---|
 | `logical_head` | `logical` | Train model to predict logical errors directly |
-| `mwpm_teacher` | `logical` + MWPM edge labels | Distillation / imitation learning |
-| `hybrid` | `logical` + MWPM edge labels | Multi-task or auxiliary teacher loss |
+| `hybrid` | `logical` + MWPM edge labels | GNN learns better edge weights fed back into decoder |
 
 ## Module layout
 

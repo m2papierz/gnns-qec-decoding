@@ -13,7 +13,7 @@ Examples
     uv run scripts/train_all_cases.py --skip-datagen
 
     # Train only specific cases
-    uv run scripts/train_all_cases.py --cases logical_head mwpm_teacher
+    uv run scripts/train_all_cases.py --cases logical_head hybrid
 
     # Use compiled backend for training
     uv run scripts/train_all_cases.py --backend compiled

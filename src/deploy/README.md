@@ -20,7 +20,7 @@ uv run scripts/export_trt.py --checkpoint outputs/runs/logical_head/best.pt
 
 # Skip TensorRT (no torch-tensorrt needed)
 uv run scripts/export_trt.py \
-    --checkpoint outputs/runs/mwpm_teacher/best.pt \
+    --checkpoint outputs/runs/hybrid/best.pt \
     --backends pytorch compiled
 
 # Custom batch geometry and iteration count
@@ -96,14 +96,12 @@ This means no manual model surgery is needed — the same `QECDecoder` works acr
 
 ## Supported training cases
 
-All four cases work with every backend:
+Both cases work with every backend:
 
 | Case | Head | Output shape |
 |------|------|-------------|
 | `logical_head` | `LogicalHead` | `(B, num_observables)` |
-| `mwpm_teacher` | `EdgeHead` | `(E_total,)` |
 | `hybrid` | `EdgeHead` | `(E_total,)` |
-| `tn_teacher` | `EdgeHead` | `(E_total,)` |
 
 ## Testing
 

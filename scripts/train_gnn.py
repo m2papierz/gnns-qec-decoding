@@ -6,7 +6,7 @@ Examples
     uv run scripts/train_gnn.py -c configs/train.yaml
 
     # Override case and epochs
-    uv run scripts/train_gnn.py -c configs/train.yaml --case mwpm_teacher --epochs 50
+    uv run scripts/train_gnn.py -c configs/train.yaml --case hybrid --epochs 50
 
     # Resume from checkpoint
     uv run scripts/train_gnn.py -c configs/train.yaml --resume outputs/runs/logical_head/best.pt
@@ -44,7 +44,7 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
         "--case",
         type=str,
         default=None,
-        choices=["logical_head", "mwpm_teacher", "hybrid", "tn_teacher"],
+        choices=["logical_head", "hybrid"],
     )
     parser.add_argument(
         "--backend",

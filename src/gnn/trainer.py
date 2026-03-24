@@ -18,7 +18,6 @@ from typing import Any, Dict
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import yaml
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
@@ -42,8 +41,7 @@ class TrainConfig:
     Attributes
     ----------
     case : str
-        Training case: ``"logical_head"``, ``"mwpm_teacher"``,
-        ``"hybrid"``, or ``"tn_teacher"``.
+        Training case: ``"logical_head"`` or ``"hybrid"``.
     datasets_dir : Path
         Root directory of packaged datasets.
     output_dir : Path
@@ -66,7 +64,7 @@ class TrainConfig:
         DataLoader worker processes.
     edge_pos_weight : float or None
         Positive-class weight for edge BCE loss.  If None, estimated
-        from training data.  Ignored for ``tn_teacher``.
+        from training data.  Only used for ``hybrid``.
     max_grad_norm : float
         Maximum gradient norm for clipping.
     patience : int
@@ -195,33 +193,6 @@ class _GraphNormalizedBCE(nn.Module):
         )
 
 
-class _SoftTeacherLoss(nn.Module):
-    """
-    Graph-normalized MSE between predicted probabilities and TN marginals.
-
-    For ``tn_teacher``: targets are continuous per-edge marginals in
-    ``[0, 1]`` (not binary labels).  Loss is computed as MSE between
-    ``sigmoid(logits)`` and the soft targets, averaged within each
-    graph, then averaged across graphs.
-    """
-
-    def forward(
-        self,
-        logits: torch.Tensor,
-        target: torch.Tensor,
-        batch: Batch,
-    ) -> torch.Tensor:
-        pred = torch.sigmoid(logits)
-        edge_graph = batch.batch[batch.edge_index[0]]
-        n_graphs = int(batch.batch.max()) + 1
-        raw = F.mse_loss(pred, target, reduction="none")
-        graph_loss = torch.zeros(n_graphs, device=logits.device)
-        graph_count = torch.zeros(n_graphs, device=logits.device)
-        graph_loss.scatter_add_(0, edge_graph, raw)
-        graph_count.scatter_add_(0, edge_graph, torch.ones_like(raw))
-        return (graph_loss / graph_count.clamp(min=1)).mean()
-
-
 def _build_criterion(
     case: Case,
     pos_weight: float | None = None,
@@ -230,8 +201,6 @@ def _build_criterion(
     """Build the loss function for a given training case."""
     if case == "logical_head":
         return nn.BCEWithLogitsLoss()
-    if case == "tn_teacher":
-        return _SoftTeacherLoss()
     pw = torch.tensor([pos_weight], device=device) if pos_weight is not None else None
     return _GraphNormalizedBCE(pos_weight=pw)
 
@@ -420,7 +389,7 @@ class Trainer:
     def _setup_criterion(self) -> None:
         """Build loss function, estimating pos_weight if needed."""
         pos_weight = self.cfg.edge_pos_weight
-        if self.cfg.case not in ("logical_head", "tn_teacher") and pos_weight is None:
+        if self.cfg.case != "logical_head" and pos_weight is None:
             pos_weight = _estimate_edge_pos_weight(self.train_loader)
 
         self.criterion = _build_criterion(

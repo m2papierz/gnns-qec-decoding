@@ -9,16 +9,15 @@ An end-to-end project on decoding topological quantum error-correcting codes wit
 > - [x] Dataset generation pipeline (raw + processed)
 > - [x] MWPM baseline evaluation + sanity checks
 > - [x] GNN `logical_head` training & evaluation (research-grade, not yet optimized)
-> - [x] GNN `mwpm_teacher` training & evaluation (research-grade, not yet optimized)
 > - [x] GNN `hybrid` training & evaluation (research-grade, not yet optimized)
 > - [x] Swappable compute backend (`pytorch`, `compiled`, `cuda`)
 > - [x] Pluggable decoder interface (`decoders/`)
 > - [x] Custom CUDA kernels for hot paths (symmetric edge features, fused norm+residual, graph-normalized BCE)
-> - [x] cuTensorNet exact contraction for TN decoder (with heuristic fallback)
 > - [x] TensorRT deployment path via ``torch.compile`` + ``torch_tensorrt`` backend
 >
 > ### In progress / experimental
-> - [ ] GNN `tn_teacher` — tensor-network soft labels as training targets
+> - [ ] GNN `bp_teacher` — BP soft labels as training targets (CUDA-Q)
+> - [ ] BP+OSD evaluation decoder via CUDA-Q
 > - [ ] Benchmark harness (latency, throughput, memory across backends)
 >
 > ### Benchmarks (planned)
@@ -51,14 +50,14 @@ Stim's detector error model (DEM) describes which physical faults trigger which 
 
 **MWPM (Minimum-Weight Perfect Matching)** is the standard classical decoder. It pairs up triggered detectors (or pairs them with the boundary) to find the lowest-weight explanation of the syndrome, then reads off whether the logical observable flipped. PyMatching implements this efficiently.
 
-**GNN decoders** operate on the same detector graph but can learn richer error structure. This project explores four modes:
+**GNN decoders** operate on the same detector graph but can learn richer error structure. This project explores two training modes:
 
 | Mode | What the GNN predicts | Why |
 |------|----------------------|-----|
 | `logical_head` | Observable flip directly from the graph + syndrome | Simplest end-to-end approach |
-| `mwpm_teacher` | Which edges MWPM selected (distillation) | Faster inference with comparable accuracy |
 | `hybrid` | New edge weights fed back into MWPM | Can outperform MWPM by learning a better noise model |
-| `tn_teacher` | Per-edge error marginals from tensor-network contraction | Richer continuous supervision than binary MWPM labels |
+
+A third mode, `bp_teacher` (soft per-edge marginals from belief propagation via CUDA-Q), is planned.
 
 ## Developer setup
 
@@ -126,7 +125,7 @@ Train a GNN decoder and evaluate against the MWPM baseline:
 uv run scripts/train_gnn.py -c configs/train.yaml
 
 # Override case or backend
-uv run scripts/train_gnn.py -c configs/train.yaml --case mwpm_teacher
+uv run scripts/train_gnn.py -c configs/train.yaml --case hybrid
 uv run scripts/train_gnn.py -c configs/train.yaml --backend compiled
 
 # Evaluate with MWPM comparison
@@ -135,11 +134,11 @@ uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \
 ```
 
 See [`src/gnn/README.md`](src/gnn/README.md) for architecture details,
-hyperparameters, all four training modes, and evaluation protocols.
+hyperparameters, training modes, and evaluation protocols.
 
 ## Deployment and benchmarking
 
-Train all 4 cases (generates data if needed, ~1-2h total on RTX 4080 Laptop):
+Train all cases (generates data if needed, ~1-2h total on RTX 4080 Laptop):
 
 ```bash
 uv run scripts/train_all_cases.py -v
@@ -156,7 +155,7 @@ uv run scripts/export_trt.py --checkpoint outputs/runs/logical_head/best.pt \
     --backends pytorch compiled
 
 # Custom batch size
-uv run scripts/export_trt.py --checkpoint outputs/runs/mwpm_teacher/best.pt \
+uv run scripts/export_trt.py --checkpoint outputs/runs/hybrid/best.pt \
     --n-graphs 8 --n-iters 200
 ```
 

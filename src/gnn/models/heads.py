@@ -1,16 +1,15 @@
 """
 Decoding heads and full decoder for QEC graph decoding.
 
-Two head architectures cover all three training modes:
+Two head architectures cover the training modes:
 
 - :class:`LogicalHead` — graph-level classification of observable flips
   using attention-weighted node pooling and edge embedding pooling.
 - :class:`EdgeHead` — per-edge binary prediction using learned edge
   embeddings from the encoder.
 
-The ``mwpm_teacher`` and ``hybrid`` cases share the same model
-architecture; they differ only in loss computation and evaluation
-protocol.
+The ``hybrid`` case uses :class:`EdgeHead`; ``logical_head`` uses
+:class:`LogicalHead`.
 """
 
 from __future__ import annotations
@@ -211,7 +210,7 @@ def build_model(
 
     Parameters
     ----------
-    case : {"logical_head", "mwpm_teacher", "hybrid", "tn_teacher"}
+    case : {"logical_head", "hybrid"}
         Training case.  Determines which head is attached.
     node_dim, edge_dim, hidden_dim, num_layers, dropout
         Encoder architecture parameters.
@@ -236,16 +235,14 @@ def build_model(
             num_observables=num_observables,
             dropout=dropout,
         )
-    elif case in ("mwpm_teacher", "hybrid", "tn_teacher"):
+    elif case == "hybrid":
         head = EdgeHead(
             hidden_dim=hidden_dim,
             dropout=dropout,
         )
     else:
         raise ValueError(
-            f"Unknown case {case!r}. "
-            f"Expected one of: 'logical_head', 'mwpm_teacher', 'hybrid', "
-            f"'tn_teacher'"
+            f"Unknown case {case!r}. " f"Expected one of: 'logical_head', 'hybrid'"
         )
 
     return QECDecoder(encoder, head)

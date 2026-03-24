@@ -113,9 +113,7 @@ class TestEdgeHead:
 class TestQECDecoder:
     """Tests for the full encoder + head pipeline."""
 
-    @pytest.mark.parametrize(
-        "case", ["logical_head", "mwpm_teacher", "hybrid", "tn_teacher"]
-    )
+    @pytest.mark.parametrize("case", ["logical_head", "hybrid"])
     def test_forward_runs(self, case: str, batched: Batch) -> None:
         model = build_model(
             case,
@@ -143,7 +141,7 @@ class TestQECDecoder:
 
     def test_edge_head_output_shape(self, batched: Batch) -> None:
         model = build_model(
-            "mwpm_teacher",
+            "hybrid",
             hidden_dim=32,
             num_layers=2,
             dropout=0.0,
@@ -153,14 +151,6 @@ class TestQECDecoder:
             logits = model(batched)
         total_edges = batched.edge_attr.shape[0]
         assert logits.shape == (total_edges,)
-
-    def test_hybrid_same_as_teacher(self, batched: Batch) -> None:
-        """hybrid and mwpm_teacher produce same architecture."""
-        m1 = build_model("mwpm_teacher", hidden_dim=16, num_layers=2)
-        m2 = build_model("hybrid", hidden_dim=16, num_layers=2)
-        p1 = {n for n, _ in m1.named_parameters()}
-        p2 = {n for n, _ in m2.named_parameters()}
-        assert p1 == p2
 
     def test_backward_pass(self, batched: Batch) -> None:
         model = build_model(
@@ -205,7 +195,6 @@ class TestBuildModel:
         )
         assert isinstance(model.head, LogicalHead)
 
-    @pytest.mark.parametrize("case", ["mwpm_teacher", "hybrid"])
-    def test_edge_cases_use_edge_head(self, case: str) -> None:
-        model = build_model(case, hidden_dim=32)
+    def test_hybrid_uses_edge_head(self) -> None:
+        model = build_model("hybrid", hidden_dim=32)
         assert isinstance(model.head, EdgeHead)

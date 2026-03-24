@@ -35,13 +35,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=Path("data/datasets"),
     )
     parser.add_argument("--split", type=str, default="test")
-    parser.add_argument(
-        "--decoder",
-        type=str,
-        default="mwpm",
-        choices=["mwpm", "tensor_network"],
-        help="Decoder for edge-based cases",
-    )
     parser.add_argument("--baseline", type=Path, default=None)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("-o", "--output", type=Path, default=None)
@@ -59,7 +52,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         checkpoint=args.checkpoint,
         datasets_dir=args.datasets_dir,
         split=args.split,
-        decoder_type=args.decoder,
         baseline_path=args.baseline,
         batch_size=args.batch_size,
     )

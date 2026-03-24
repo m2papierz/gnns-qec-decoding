@@ -81,8 +81,7 @@ class MixedSurfaceCodeDataset(Dataset):
     y : FloatTensor
         Target depends on *case*:
         ``"logical_head"`` => ``(num_observables,)``;
-        ``"mwpm_teacher"`` / ``"hybrid"`` => ``(E,)`` binary directed edge labels;
-        ``"tn_teacher"`` => ``(E,)`` continuous directed edge marginals.
+        ``"hybrid"`` => ``(E,)`` binary directed edge labels.
     logical : FloatTensor, shape ``(num_observables,)``
         Ground-truth observable flip (always present for eval).
     setting_id : LongTensor, scalar
@@ -139,7 +138,6 @@ class MixedSurfaceCodeDataset(Dataset):
         self._graph_cache: Dict[int, Tuple[torch.Tensor, torch.Tensor]] = {}
         self._split_cache: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
         self._mwpm_cache: Dict[int, Tuple[np.ndarray, np.ndarray, int]] = {}
-        self._tn_cache: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
 
     def __len__(self) -> int:
         return int(self._setting_id.shape[0])
@@ -191,22 +189,6 @@ class MixedSurfaceCodeDataset(Dataset):
         self._mwpm_cache[sid] = (packed, dir_to_undir, num_und)
         return packed, dir_to_undir, num_und
 
-    def _get_tn_arrays(self, sid: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Return cached TN soft labels ``(soft_labels, dir_to_undir)`` for *sid*.
-
-        Soft labels are float32 per-undirected-edge marginals produced
-        by tensor-network contraction.
-        """
-        if sid in self._tn_cache:
-            return self._tn_cache[sid]
-
-        sdir = self._setting_dir(sid)
-        soft = np.load(sdir / f"{self.split}_tn_soft_labels.npy", mmap_mode="r")
-        dir_to_undir = np.load(sdir / "mwpm" / "dir_to_undir.npy")
-
-        self._tn_cache[sid] = (soft, dir_to_undir)
-        return soft, dir_to_undir
-
     def __getitem__(self, idx: int) -> Data:
         sid = int(self._setting_id[idx])
         shot = int(self._shot_id[idx])
@@ -229,13 +211,8 @@ class MixedSurfaceCodeDataset(Dataset):
         # Target depends on training case.
         if self.case == "logical_head":
             y = logical
-        elif self.case == "tn_teacher":
-            # Continuous per-undirected-edge marginals => expand to directed
-            soft_labels, dir_to_undir = self._get_tn_arrays(sid)
-            und_marginals = np.asarray(soft_labels[shot], dtype=np.float32)
-            y = torch.from_numpy(und_marginals[dir_to_undir])
         else:
-            # mwpm_teacher, hybrid: bit-packed binary labels
+            # hybrid: bit-packed binary MWPM edge labels
             packed, dir_to_undir, num_und = self._get_mwpm_arrays(sid)
             und = _unpack_bits_row(np.asarray(packed[shot], dtype=np.uint8), num_und)
             y = torch.from_numpy(und[dir_to_undir].astype(np.float32, copy=False))

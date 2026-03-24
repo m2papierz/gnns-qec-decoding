@@ -11,7 +11,7 @@ Examples
 
     # Only pytorch and compiled (no torch-tensorrt needed)
     uv run scripts/export_trt.py \\
-        --checkpoint outputs/runs/mwpm_teacher/best.pt \\
+        --checkpoint outputs/runs/hybrid/best.pt \\
         --backends pytorch compiled
 
     # Custom batch size and iterations

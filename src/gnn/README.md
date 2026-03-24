@@ -4,7 +4,7 @@ Graph neural network decoders for rotated surface code, operating on the detecto
 
 ## Architecture
 
-All four training modes share a single encoder backbone; only the prediction head differs.
+All training modes share a single encoder backbone; only the prediction head differs.
 
 ```
                        ┌─────────────────────────────────────────────┐
@@ -60,7 +60,7 @@ Set via `QECDEC_BACKEND` env var or `set_backend()` at runtime.
 3. Mean pooling over edge embeddings per graph => `(B, H)`
 4. Concatenate all three => two-layer MLP => `(B, num_observables)` logits
 
-**EdgeHead** — per-edge prediction (used by `mwpm_teacher`, `hybrid`, and `tn_teacher`):
+**EdgeHead** — per-edge prediction (used by `hybrid`):
 1. Symmetric node pair: `[h_u + h_v, |h_u − h_v|, edge_h]` => `(E, 3H)`
 2. Two-layer MLP => `(E,)` logits
 
@@ -70,13 +70,11 @@ Set via `QECDEC_BACKEND` env var or `set_backend()` at runtime.
 from gnn.models import build_model
 
 model = build_model("logical_head", hidden_dim=64, num_layers=4)
-model = build_model("mwpm_teacher", hidden_dim=64, num_layers=4)
 model = build_model("hybrid", hidden_dim=64, num_layers=4)
-model = build_model("tn_teacher", hidden_dim=64, num_layers=4)
 ```
 
-`mwpm_teacher`, `hybrid`, and `tn_teacher` produce identical architectures —
-they differ in loss computation, label format, and evaluation protocol.
+`hybrid` uses `EdgeHead` — it differs from `logical_head` in loss
+computation, label format, and evaluation protocol.
 
 ## Decoders (`decoders/`)
 
@@ -99,7 +97,7 @@ The evaluator selects a decoder via `--decoder-type`.
 uv run scripts/train_gnn.py -c configs/train.yaml
 
 # Override case and epochs
-uv run scripts/train_gnn.py -c configs/train.yaml --case mwpm_teacher --epochs 50
+uv run scripts/train_gnn.py -c configs/train.yaml --case hybrid --epochs 50
 
 # Use torch.compile backend
 uv run scripts/train_gnn.py -c configs/train.yaml --backend compiled
@@ -143,9 +141,7 @@ Programmatic access: `TrainConfig.from_yaml("configs/train.yaml")`.
 | Case | Loss | Details |
 |------|------|---------|
 | `logical_head` | `BCEWithLogitsLoss` | Graph-level: logits vs observable ground truth |
-| `mwpm_teacher` | `_GraphNormalizedBCE` + `pos_weight` | Per-edge BCE averaged within each graph, then across graphs. Prevents larger graphs (higher `d`) from dominating gradients. `pos_weight` auto-estimated from training data |
-| `hybrid` | Same as `mwpm_teacher` | Same architecture and loss; different evaluation |
-| `tn_teacher` | `_SoftTeacherLoss` | Graph-normalized MSE between `sigmoid(logits)` and continuous TN marginals |
+| `hybrid` | `_GraphNormalizedBCE` + `pos_weight` | Per-edge BCE averaged within each graph, then across graphs. Prevents larger graphs (higher `d`) from dominating gradients. `pos_weight` auto-estimated from training data |
 
 ### Training details
 
@@ -205,11 +201,9 @@ uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \
 threshold the logit at 0 => predicted observable. Compare with ground
 truth. Report LER per setting.
 
-**`mwpm_teacher` / `hybrid` / `tn_teacher`**: for each setting, collect
-per-edge logits across all shots, build a decoder (MWPM by default)
-from the GNN-predicted weights, decode all syndromes, compare with
-ground truth.  The decoder is selected via the `decoder_type` parameter
-(default: `"mwpm"`).
+**`hybrid`**: for each setting, collect per-edge logits across all
+shots, build an MWPM decoder from the GNN-predicted weights, decode
+all syndromes, compare with ground truth.
 
 ### Output format
 
@@ -238,7 +232,7 @@ Each `__getitem__` returns a PyG `Data` with:
 | `x` | `(N, 1)` | Syndrome bits (0/1 float), boundary node = 0 |
 | `edge_index` | `(2, E)` | Directed COO (both directions stored) |
 | `edge_attr` | `(E, 2)` | `[error_prob, weight]` |
-| `y` | varies | `(num_obs,)` for logical; `(E,)` binary for mwpm_teacher/hybrid; `(E,)` float32 marginals for tn_teacher |
+| `y` | varies | `(num_obs,)` for logical_head; `(E,)` binary edge labels for hybrid |
 | `logical` | `(num_obs,)` | Always present for evaluation |
 | `setting_id` | scalar | Setting index for debugging |
 

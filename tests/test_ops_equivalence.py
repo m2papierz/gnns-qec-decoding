@@ -298,39 +298,6 @@ class TestEncoderRefactorRegression:
             assert param.grad is not None, f"No gradient for {name}"
 
 
-class TestBuildModelTnTeacher:
-    def test_tn_teacher_builds(self) -> None:
-        from gnn.models.heads import EdgeHead, QECDecoder, build_model
-
-        model = build_model("tn_teacher", hidden_dim=32, num_layers=2)
-        assert isinstance(model, QECDecoder)
-        assert isinstance(model.head, EdgeHead)
-
-    def test_tn_teacher_forward(self) -> None:
-        from torch_geometric.data import Batch, Data
-
-        from gnn.models.heads import build_model
-
-        model = build_model("tn_teacher", hidden_dim=32, num_layers=2, dropout=0.0)
-        model.eval()
-
-        graphs = [
-            Data(
-                x=torch.randn(6, 1),
-                edge_index=torch.randint(0, 6, (2, 10)),
-                edge_attr=torch.randn(10, 2),
-            )
-            for _ in range(3)
-        ]
-        batch = Batch.from_data_list(graphs)
-
-        with torch.no_grad():
-            logits = model(batch)
-
-        total_edges = batch.edge_attr.shape[0]
-        assert logits.shape == (total_edges,)
-
-
 def _cuda_ops_available() -> bool:
     """Check if CUDA kernels are built and GPU is present."""
     if not torch.cuda.is_available():
