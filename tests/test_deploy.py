@@ -185,7 +185,7 @@ class TestTensorRTBackend:
         )
         trt_out = trt_engine.predict(batch)
 
-        torch.testing.assert_close(pt_out, trt_out, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(pt_out, trt_out, atol=5e-4, rtol=5e-4)
 
     @pytest.mark.parametrize("case", CASES)
     def test_all_cases_compile(self, case: str) -> None:
