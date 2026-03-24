@@ -25,6 +25,7 @@ from torch_geometric.data import Batch
 from tqdm import tqdm
 
 from decoders.base import BaseDecoder, DecoderConfig
+from decoders.bp_osd import BPOSDDecoder
 from decoders.mwpm import MWPMDecoder
 from gnn.metrics import EvalReport, SettingResult
 from gnn.models.heads import Case, QECDecoder, build_model
@@ -124,6 +125,7 @@ class Evaluator:
         directed_logits: np.ndarray,
         dir_to_undir: np.ndarray,
         num_undirected: int,
+        observable_flips_und: np.ndarray | None = None,
     ) -> BaseDecoder:
         """Build a decoder from GNN edge logits for a single graph.
 
@@ -139,6 +141,9 @@ class Evaluator:
             Directed-to-undirected edge mapping.
         num_undirected : int
             Number of unique undirected edges.
+        observable_flips_und : ndarray or None, shape ``(U, num_obs)``
+            Per-undirected-edge observable flip mask.  Required for
+            ``"bp_osd"`` decoder; ignored by ``"mwpm"``.
 
         Returns
         -------
@@ -157,6 +162,21 @@ class Evaluator:
                 directed_logits,
                 dir_to_undir,
                 num_undirected,
+            )
+        if self.decoder_type == "bp_osd":
+            if observable_flips_und is None:
+                raise ValueError(
+                    "BP+OSD decoder requires observable_flips but none were "
+                    "loaded.  Ensure the dataset was generated with "
+                    "observable_flips.npy in each graph directory."
+                )
+            return BPOSDDecoder.from_gnn_logits(
+                config,
+                und_pairs,
+                directed_logits,
+                dir_to_undir,
+                num_undirected,
+                observable_flips_und,
             )
         raise ValueError(f"Unknown decoder type: {self.decoder_type!r}")
 
@@ -300,6 +320,23 @@ class Evaluator:
         und_pairs, dir_to_undir = undirected_edges(edge_index_np)
         num_und = und_pairs.shape[0]
 
+        # Load per-undirected-edge observable flips for BP+OSD.
+        observable_flips_und: np.ndarray | None = None
+        if self.decoder_type == "bp_osd":
+            shard = self.datasets_dir / self.case / "shards" / meta.relpath
+            obs_path = shard / "graph" / "observable_flips.npy"
+            if not obs_path.exists():
+                raise FileNotFoundError(
+                    f"BP+OSD requires observable_flips.npy: {obs_path}"
+                )
+            obs_dir = np.load(obs_path)  # (E_directed, num_obs)
+            # Collapse directed => undirected (first occurrence per edge).
+            first_idx = np.full(num_und, -1, dtype=np.int64)
+            for e, uid in enumerate(dir_to_undir):
+                if first_idx[uid] == -1:
+                    first_idx[uid] = e
+            observable_flips_und = obs_dir[first_idx]
+
         predicted = np.empty((n, meta.num_observables), dtype=np.uint8)
         decoder_cache: Dict[bytes, BaseDecoder] = {}
 
@@ -329,6 +366,7 @@ class Evaluator:
                         graph_logits,
                         dir_to_undir,
                         num_und,
+                        observable_flips_und,
                     )
 
                 predicted[off + g] = decoder_cache[cache_key].decode(syndrome[off + g])
