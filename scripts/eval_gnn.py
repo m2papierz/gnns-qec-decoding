@@ -1,10 +1,12 @@
-"""Evaluate a trained GNN decoder and compare with MWPM baseline.
+"""Evaluate a trained GNN decoder and compare with baseline.
 
 Examples
 --------
     uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt
     uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt \\
         --baseline outputs/results/mwpm_baseline.json
+    uv run scripts/eval_gnn.py --checkpoint outputs/runs/edge/best.pt \\
+        --decoder bp_osd --baseline outputs/results/bp_osd_baseline.json
 """
 
 import argparse

@@ -84,9 +84,10 @@ observable predictions.
 | Decoder | Description |
 |---------|-------------|
 | `MWPMDecoder` | PyMatching-backed MWPM; accepts static or GNN-derived weights |
+| `BPOSDDecoder` | NVIDIA CUDA-Q BP+OSD; accepts static or GNN-derived edge probabilities |
 
 All decoders implement `BaseDecoder` with `decode()` and `decode_batch()`.
-The evaluator selects a decoder via `--decoder-type`.
+The evaluator selects a decoder via `--decoder` (`mwpm` or `bp_osd`).
 
 ## Training
 
@@ -141,7 +142,7 @@ Programmatic access: `TrainConfig.from_yaml("configs/train.yaml")`.
 | Case | Loss | Details |
 |------|------|---------|
 | `direct` | `BCEWithLogitsLoss` | Graph-level: logits vs observable ground truth |
-| `edge` | `_GraphNormalizedBCE` + `pos_weight` | Per-edge BCE averaged within each graph, then across graphs. Prevents larger graphs (higher `d`) from dominating gradients. `pos_weight` auto-estimated from training data |
+| `edge` | `_SoftTeacherLoss` | Graph-normalized MSE: `(σ(logit) - target)²` averaged within each graph, then across graphs. Targets are continuous BP marginals in `[0, 1]` |
 
 ### Training details
 
@@ -189,6 +190,14 @@ uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt
 uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt \
     --baseline outputs/results/mwpm_baseline.json
 
+# Edge model with MWPM decoder
+uv run scripts/eval_gnn.py --checkpoint outputs/runs/edge/best.pt \
+    --decoder mwpm --baseline outputs/results/mwpm_baseline.json
+
+# Edge model with BP+OSD decoder (CUDA-Q)
+uv run scripts/eval_gnn.py --checkpoint outputs/runs/edge/best.pt \
+    --decoder bp_osd --baseline outputs/results/bp_osd_baseline.json
+
 # Save report
 uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt \
     --baseline outputs/results/mwpm_baseline.json \
@@ -202,8 +211,12 @@ threshold the logit at 0 => predicted observable. Compare with ground
 truth. Report LER per setting.
 
 **`edge`**: for each setting, collect per-edge logits across all
-shots, build an MWPM decoder from the GNN-predicted weights, decode
-all syndromes, compare with ground truth.
+shots, build a decoder from the GNN-predicted weights, decode
+all syndromes, compare with ground truth. The decoder backend is
+selected via `--decoder`:
+
+- `mwpm` (default): GNN edge logits => sigmoid => MWPM weights => PyMatching decode
+- `bp_osd`: GNN edge logits => sigmoid => error probabilities => CUDA-Q BP+OSD decode => project onto observables via `observable_flips` mask
 
 ### Output format
 
@@ -232,7 +245,7 @@ Each `__getitem__` returns a PyG `Data` with:
 | `x` | `(N, 1)` | Syndrome bits (0/1 float), boundary node = 0 |
 | `edge_index` | `(2, E)` | Directed COO (both directions stored) |
 | `edge_attr` | `(E, 2)` | `[error_prob, weight]` |
-| `y` | varies | `(num_obs,)` for direct; `(E,)` binary edge labels for edge |
+| `y` | varies | `(num_obs,)` for direct; `(E,)` float BP marginals for edge |
 | `logical` | `(num_obs,)` | Always present for evaluation |
 | `setting_id` | scalar | Setting index for debugging |
 

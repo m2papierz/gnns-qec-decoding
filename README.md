@@ -9,15 +9,13 @@ An end-to-end project on decoding topological quantum error-correcting codes wit
 > - [x] Dataset generation pipeline (raw + processed)
 > - [x] MWPM baseline evaluation + sanity checks
 > - [x] GNN `direct` training & evaluation (research-grade, not yet optimized)
-> - [x] GNN `edge` training & evaluation (research-grade, not yet optimized)
+> - [x] GNN `edge` training & evaluation with BP soft labels (research-grade, not yet optimized)
 > - [x] Swappable compute backend (`pytorch`, `compiled`, `cuda`)
-> - [x] Pluggable decoder interface (`decoders/`)
+> - [x] Pluggable decoder interface (`decoders/`) — MWPM + BP+OSD (CUDA-Q)
 > - [x] Custom CUDA kernels for hot paths (symmetric edge features, fused norm+residual, graph-normalized BCE)
 > - [x] TensorRT deployment path via ``torch.compile`` + ``torch_tensorrt`` backend
 >
 > ### In progress / experimental
-> - [ ] GNN `bp_teacher` — BP soft labels as training targets (CUDA-Q)
-> - [ ] BP+OSD evaluation decoder via CUDA-Q
 > - [ ] Benchmark harness (latency, throughput, memory across backends)
 >
 > ### Benchmarks (planned)
@@ -55,9 +53,9 @@ Stim's detector error model (DEM) describes which physical faults trigger which 
 | Mode | What the GNN predicts | Why |
 |------|----------------------|-----|
 | `direct` | Observable flip directly from the graph + syndrome | Simplest end-to-end approach |
-| `edge` | New edge weights fed back into MWPM | Can outperform MWPM by learning a better noise model |
+| `edge` | Per-edge error probabilities fed into a downstream decoder | Can outperform MWPM by learning a better noise model |
 
-A third mode, `bp_teacher` (soft per-edge marginals from belief propagation via CUDA-Q), is planned.
+The `edge` model is trained against BP marginals (soft labels from belief propagation). At evaluation time, its per-edge probabilities can be fed into either **MWPM** (PyMatching) or **BP+OSD** (NVIDIA CUDA-Q) for decoding.
 
 ## Developer setup
 
@@ -128,9 +126,17 @@ uv run scripts/train_gnn.py -c configs/train.yaml
 uv run scripts/train_gnn.py -c configs/train.yaml --case edge
 uv run scripts/train_gnn.py -c configs/train.yaml --backend compiled
 
-# Evaluate with MWPM comparison
+# Evaluate direct model with MWPM comparison
 uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt \
     --baseline outputs/results/mwpm_baseline.json
+
+# Evaluate edge model — GNN weights fed into MWPM
+uv run scripts/eval_gnn.py --checkpoint outputs/runs/edge/best.pt \
+    --decoder mwpm --baseline outputs/results/mwpm_baseline.json
+
+# Evaluate edge model — GNN weights fed into BP+OSD (CUDA-Q)
+uv run scripts/eval_gnn.py --checkpoint outputs/runs/edge/best.pt \
+    --decoder bp_osd --baseline outputs/results/bp_osd_baseline.json
 ```
 
 See [`src/gnn/README.md`](src/gnn/README.md) for architecture details,

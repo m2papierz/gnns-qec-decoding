@@ -31,10 +31,6 @@ num_workers: 4
 # Sample cap for fast iteration (null = use all data)
 max_samples: null
 
-# Edge-case specific (edge only).
-# Set to null to auto-estimate from training data.
-edge_pos_weight: null
-
 # Gradient clipping
 max_grad_norm: 1.0
 
