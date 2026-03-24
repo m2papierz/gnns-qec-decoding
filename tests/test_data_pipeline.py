@@ -252,3 +252,53 @@ class TestBuildDetectorGraph:
 
         assert g5.num_detectors > g3.num_detectors
         assert g5.edge_index.shape[1] > g3.edge_index.shape[1]
+
+    def test_observable_flips_present(self, d3_circuit: stim.Circuit) -> None:
+        """Graph has observable_flips array."""
+        dem = d3_circuit.detector_error_model(decompose_errors=True)
+        graph = build_detector_graph(d3_circuit, dem)
+
+        assert graph.observable_flips is not None
+
+    def test_observable_flips_shape(self, d3_circuit: stim.Circuit) -> None:
+        """observable_flips has shape (E, num_observables)."""
+        dem = d3_circuit.detector_error_model(decompose_errors=True)
+        graph = build_detector_graph(d3_circuit, dem)
+
+        E = graph.edge_index.shape[1]
+        assert graph.observable_flips is not None
+        assert graph.observable_flips.shape == (E, graph.num_observables)
+        assert graph.observable_flips.dtype == bool
+
+    def test_observable_flips_not_all_false(self, d3_circuit: stim.Circuit) -> None:
+        """At least some edges flip an observable (surface code has boundary errors)."""
+        dem = d3_circuit.detector_error_model(decompose_errors=True)
+        graph = build_detector_graph(d3_circuit, dem)
+
+        assert graph.observable_flips is not None
+        assert (
+            graph.observable_flips.any()
+        ), "Expected at least one edge to flip an observable"
+
+    def test_observable_flips_bidirectional(self, d3_circuit: stim.Circuit) -> None:
+        """Both directions of an undirected edge have identical observable_flips."""
+        dem = d3_circuit.detector_error_model(decompose_errors=True)
+        graph = build_detector_graph(d3_circuit, dem)
+
+        assert graph.observable_flips is not None
+        ei = graph.edge_index
+        obs = graph.observable_flips
+        # Build lookup: (u,v) -> obs_flips row index
+        edge_to_idx: dict[tuple[int, int], int] = {}
+        for e in range(ei.shape[1]):
+            edge_to_idx[(int(ei[0, e]), int(ei[1, e]))] = e
+
+        for e in range(ei.shape[1]):
+            u, v = int(ei[0, e]), int(ei[1, e])
+            rev = edge_to_idx.get((v, u))
+            assert rev is not None, f"Missing reverse edge for ({u}, {v})"
+            np.testing.assert_array_equal(
+                obs[e],
+                obs[rev],
+                err_msg=f"Mismatch for edge ({u},{v}) vs ({v},{u})",
+            )

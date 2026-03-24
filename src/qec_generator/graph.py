@@ -39,6 +39,9 @@ class DetectorGraph:
         Number of logical observables.
     has_boundary : bool
         Whether a virtual boundary node is included.
+    observable_flips : ndarray or None, shape (E, num_observables), bool
+        Per directed edge: which logical observables are flipped when
+        this edge's error occurs.  ``None`` when not available.
     """
 
     edge_index: np.ndarray
@@ -50,6 +53,7 @@ class DetectorGraph:
     num_detectors: int
     num_observables: int
     has_boundary: bool
+    observable_flips: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         """Validate tensor shapes and value consistency."""
@@ -83,6 +87,75 @@ class DetectorGraph:
                 f"num_nodes {self.num_nodes} != num_detectors "
                 f"{self.num_detectors} + boundary {int(self.has_boundary)}"
             )
+        if self.observable_flips is not None:
+            if self.observable_flips.shape != (E, self.num_observables):
+                raise ValueError(
+                    f"observable_flips shape {self.observable_flips.shape} != "
+                    f"expected ({E}, {self.num_observables})"
+                )
+
+
+def _observable_flips_from_dem(
+    dem: stim.DetectorErrorModel,
+    num_det: int,
+    boundary_idx: int | None,
+    num_obs: int,
+) -> dict[tuple[int, int], np.ndarray]:
+    """Extract per-edge observable flip masks from a DEM.
+
+    Iterates flattened DEM error instructions, identifies the graph edge
+    each instruction corresponds to, and records which observables are
+    flipped.  Instructions sharing an edge OR their observable masks.
+
+    Parameters
+    ----------
+    dem : stim.DetectorErrorModel
+        Decomposed detector error model.
+    num_det : int
+        Number of detector nodes.
+    boundary_idx : int or None
+        Index of the collapsed boundary node (``num_det`` when present).
+    num_obs : int
+        Number of logical observables.
+
+    Returns
+    -------
+    dict[tuple[int, int], ndarray]
+        Mapping from canonical undirected edge key ``(min, max)`` to
+        boolean array of shape ``(num_obs,)`` indicating which
+        observables are flipped.
+    """
+    obs_map: dict[tuple[int, int], np.ndarray] = {}
+
+    for instr in dem.flattened():
+        if str(instr.type) != "error":
+            continue
+
+        targets = instr.targets_copy()
+        dets = [t.val for t in targets if t.is_relative_detector_id()]
+        obs = [t.val for t in targets if t.is_logical_observable_id()]
+
+        # Determine the edge key.
+        if len(dets) == 2:
+            key = (min(dets[0], dets[1]), max(dets[0], dets[1]))
+        elif len(dets) == 1 and boundary_idx is not None:
+            d = dets[0]
+            key = (min(d, boundary_idx), max(d, boundary_idx))
+        else:
+            # Hyperedge (>2 dets) or isolated observable — skip.
+            continue
+
+        mask = np.zeros(num_obs, dtype=bool)
+        for o in obs:
+            if 0 <= o < num_obs:
+                mask[o] = True
+
+        if key in obs_map:
+            obs_map[key] |= mask
+        else:
+            obs_map[key] = mask
+
+    return obs_map
 
 
 def build_detector_graph(
@@ -98,6 +171,7 @@ def build_detector_graph(
     2. Collapsing boundary nodes into a single virtual node (optional)
     3. Extracting node coordinates from circuit
     4. Creating bidirectional edge representation
+    5. Extracting per-edge observable flip masks from the DEM
 
     Parameters
     ----------
@@ -198,16 +272,27 @@ def build_detector_graph(
         ):
             best[key] = (float(p), float(w))
 
+    # Extract observable flips from DEM
+    obs_map = _observable_flips_from_dem(dem, num_det, boundary_idx, num_obs)
+
     # Expand to directed COO format (bidirectional)
-    edges, probs, weights = [], [], []
+    edges, probs, weights, obs_flips = [], [], [], []
     for (a, b), (p, w) in best.items():
         edges.extend([(a, b), (b, a)])
         probs.extend([p, p])
         weights.extend([w, w])
+        flips = obs_map.get((a, b), np.zeros(num_obs, dtype=bool))
+        obs_flips.extend([flips, flips])
 
     edge_index = (
         np.array(edges, dtype=np.int64).T if edges else np.zeros((2, 0), dtype=np.int64)
     )
+
+    observable_flips: np.ndarray | None = None
+    if num_obs > 0 and edges:
+        observable_flips = np.array(obs_flips, dtype=bool)
+    elif num_obs > 0:
+        observable_flips = np.zeros((0, num_obs), dtype=bool)
 
     return DetectorGraph(
         edge_index=edge_index,
@@ -219,4 +304,5 @@ def build_detector_graph(
         num_detectors=num_det,
         num_observables=num_obs,
         has_boundary=has_boundary,
+        observable_flips=observable_flips,
     )

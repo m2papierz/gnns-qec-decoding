@@ -89,6 +89,8 @@ def _write_graph(
     save_npy(gdir / "edge_weight.npy", graph.edge_weight, overwrite)
     save_npy(gdir / "node_coords.npy", graph.node_coords, overwrite)
     save_npy(gdir / "node_is_boundary.npy", graph.node_is_boundary, overwrite)
+    if graph.observable_flips is not None:
+        save_npy(gdir / "observable_flips.npy", graph.observable_flips, overwrite)
 
     # Save metadata
     save_json(

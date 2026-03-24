@@ -58,6 +58,11 @@ def _copy_graph(
             dtype = bool if "boundary" in name else np.float32
             save_npy(out_dir / f"{name}.npy", np.load(src).astype(dtype), overwrite)
 
+    # Optional edge-level arrays
+    obs_src = raw_dir / "observable_flips.npy"
+    if obs_src.exists():
+        save_npy(out_dir / "observable_flips.npy", np.load(obs_src), overwrite)
+
     # Load metadata
     meta = read_json(raw_dir / "meta.json") if (raw_dir / "meta.json").exists() else {}
     num_nodes = meta.get(
@@ -213,7 +218,11 @@ def _write_bp_soft_labels(
         )
 
     soft_labels = np.empty((n_samples, num_und), dtype=np.float32)
-    for off in tqdm(range(0, n_samples, chunk_size), desc=f"BP {split}", leave=False):
+    for off in tqdm(
+        range(0, n_samples, chunk_size),
+        desc=f"BP {split}",
+        leave=False,
+    ):
         end = min(off + chunk_size, n_samples)
         for i in range(off, end):
             syn = np.asarray(syndrome[i], dtype=np.uint8)
