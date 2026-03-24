@@ -1,8 +1,8 @@
 # GNN Training Configuration
 # ==========================
 
-# Training case: "logical_head" or "hybrid"
-case: "logical_head"
+# Training case: "direct" or "edge"
+case: "direct"
 
 # Compute backend: "pytorch", "compiled", or "cuda"
 backend: "compiled"
@@ -31,7 +31,7 @@ num_workers: 4
 # Sample cap for fast iteration (null = use all data)
 max_samples: null
 
-# Edge-case specific (hybrid only).
+# Edge-case specific (edge only).
 # Set to null to auto-estimate from training data.
 edge_pos_weight: null
 

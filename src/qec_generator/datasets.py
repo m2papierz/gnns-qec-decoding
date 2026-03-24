@@ -294,7 +294,7 @@ def generate_datasets(
     ----------
     cfg : Config
         Configuration with raw_data_dir and datasets_dir.
-    cases : tuple of Case, default=("logical_head", "hybrid")
+    cases : tuple of Case, default=("direct", "edge")
         Dataset variants to generate.
     overwrite : bool, default=False
         Overwrite existing files.
@@ -373,7 +373,7 @@ def generate_datasets(
                     continue
 
             # MWPM labels
-            if case == "hybrid":
+            if case == "edge":
                 for split, stats in split_stats.items():
                     _write_mwpm_labels(
                         shard_dir,

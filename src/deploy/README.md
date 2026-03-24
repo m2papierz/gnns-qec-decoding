@@ -16,21 +16,21 @@ All backends accept the same `torch_geometric.data.Batch` input and produce nume
 
 ```bash
 # Benchmark all backends on a trained checkpoint
-uv run scripts/export_trt.py --checkpoint outputs/runs/logical_head/best.pt
+uv run scripts/export_trt.py --checkpoint outputs/runs/direct/best.pt
 
 # Skip TensorRT (no torch-tensorrt needed)
 uv run scripts/export_trt.py \
-    --checkpoint outputs/runs/hybrid/best.pt \
+    --checkpoint outputs/runs/edge/best.pt \
     --backends pytorch compiled
 
 # Custom batch geometry and iteration count
 uv run scripts/export_trt.py \
-    --checkpoint outputs/runs/hybrid/best.pt \
+    --checkpoint outputs/runs/edge/best.pt \
     --n-graphs 8 --n-nodes 100 --n-edges 240 --n-iters 200
 
 # FP32 TensorRT (tighter tolerance, lower speedup)
 uv run scripts/export_trt.py \
-    --checkpoint outputs/runs/logical_head/best.pt \
+    --checkpoint outputs/runs/direct/best.pt \
     --precision fp32
 ```
 
@@ -41,7 +41,7 @@ Produces a JSON report next to the checkpoint (or at `--output`).
 ```python
 from deploy.engine import InferenceEngine, load_model_from_checkpoint, make_synthetic_batch
 
-model, cfg = load_model_from_checkpoint("outputs/runs/logical_head/best.pt")
+model, cfg = load_model_from_checkpoint("outputs/runs/direct/best.pt")
 
 # Eager baseline
 engine = InferenceEngine(model, backend="pytorch", device="cuda")
@@ -100,8 +100,8 @@ Both cases work with every backend:
 
 | Case | Head | Output shape |
 |------|------|-------------|
-| `logical_head` | `LogicalHead` | `(B, num_observables)` |
-| `hybrid` | `EdgeHead` | `(E_total,)` |
+| `direct` | `LogicalHead` | `(B, num_observables)` |
+| `edge` | `EdgeHead` | `(E_total,)` |
 
 ## Testing
 

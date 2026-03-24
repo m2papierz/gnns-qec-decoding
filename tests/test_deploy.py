@@ -77,7 +77,7 @@ class TestPytorchBackend:
         batch = _make_batch(n_graphs=3, device="cpu")
         out = engine.predict(batch)
 
-        if case == "logical_head":
+        if case == "direct":
             assert out.shape == (3, 1)
         else:
             # EdgeHead: one logit per directed edge
@@ -85,7 +85,7 @@ class TestPytorchBackend:
 
     def test_deterministic_eval_mode(self) -> None:
         """Repeated calls produce identical output (no dropout)."""
-        model = build_model("logical_head", hidden_dim=16, num_layers=2, dropout=0.0)
+        model = build_model("direct", hidden_dim=16, num_layers=2, dropout=0.0)
         engine = InferenceEngine(model, backend="pytorch", device="cpu")
         batch = _make_batch(device="cpu")
 
@@ -95,7 +95,7 @@ class TestPytorchBackend:
 
     def test_benchmark_returns_metrics(self) -> None:
         """Benchmark dict has all expected keys with sane values."""
-        model = build_model("logical_head", hidden_dim=16, num_layers=2, dropout=0.0)
+        model = build_model("direct", hidden_dim=16, num_layers=2, dropout=0.0)
         engine = InferenceEngine(
             model,
             backend="pytorch",
@@ -122,7 +122,7 @@ class TestCompiledBackend:
     def test_output_matches_pytorch(self) -> None:
         """Compiled backend is numerically identical to PyTorch."""
         torch.manual_seed(42)
-        model = build_model("logical_head", hidden_dim=32, num_layers=3, dropout=0.0)
+        model = build_model("direct", hidden_dim=32, num_layers=3, dropout=0.0)
         batch = _make_batch(n_graphs=2, device="cuda")
 
         pt_engine = InferenceEngine(model, backend="pytorch", device="cuda")
@@ -151,7 +151,7 @@ class TestTensorRTBackend:
     def test_output_close_to_pytorch(self) -> None:
         """TRT output within FP16 tolerance of PyTorch."""
         torch.manual_seed(42)
-        model = build_model("logical_head", hidden_dim=32, num_layers=3, dropout=0.0)
+        model = build_model("direct", hidden_dim=32, num_layers=3, dropout=0.0)
         batch = _make_batch(n_graphs=2, device="cuda")
 
         pt_engine = InferenceEngine(model, backend="pytorch", device="cuda")
@@ -171,7 +171,7 @@ class TestTensorRTBackend:
     def test_fp32_precision(self) -> None:
         """TRT with fp32 is tighter than fp16."""
         torch.manual_seed(42)
-        model = build_model("logical_head", hidden_dim=16, num_layers=2, dropout=0.0)
+        model = build_model("direct", hidden_dim=16, num_layers=2, dropout=0.0)
         batch = _make_batch(n_graphs=2, device="cuda")
 
         pt_engine = InferenceEngine(model, backend="pytorch", device="cuda")

@@ -80,8 +80,8 @@ class MixedSurfaceCodeDataset(Dataset):
         ``[error_prob, weight]`` per directed edge.
     y : FloatTensor
         Target depends on *case*:
-        ``"logical_head"`` => ``(num_observables,)``;
-        ``"hybrid"`` => ``(E,)`` binary directed edge labels.
+        ``"direct"`` => ``(num_observables,)``;
+        ``"edge"`` => ``(E,)`` binary directed edge labels.
     logical : FloatTensor, shape ``(num_observables,)``
         Ground-truth observable flip (always present for eval).
     setting_id : LongTensor, scalar
@@ -209,10 +209,10 @@ class MixedSurfaceCodeDataset(Dataset):
         logical = torch.from_numpy(np.asarray(logical_mm[shot], dtype=np.float32))
 
         # Target depends on training case.
-        if self.case == "logical_head":
+        if self.case == "direct":
             y = logical
         else:
-            # hybrid: bit-packed binary MWPM edge labels
+            # edge: bit-packed binary MWPM edge labels
             packed, dir_to_undir, num_und = self._get_mwpm_arrays(sid)
             und = _unpack_bits_row(np.asarray(packed[shot], dtype=np.uint8), num_und)
             y = torch.from_numpy(und[dir_to_undir].astype(np.float32, copy=False))

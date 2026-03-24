@@ -6,8 +6,8 @@ with optional comparison against MWPM baseline results.
 
 Evaluation protocols by training case:
 
-- ``logical_head``: threshold graph-level logits at 0 => observable flip.
-- ``hybrid``: convert per-edge logits to decoder weights => decode with
+- ``direct``: threshold graph-level logits at 0 => observable flip.
+- ``edge``: convert per-edge logits to decoder weights => decode with
   MWPM decoder => LER.
 """
 
@@ -253,7 +253,7 @@ class Evaluator:
         )
 
     @torch.no_grad()
-    def _eval_logical_head(
+    def _eval_direct(
         self,
         edge_index: torch.Tensor,
         edge_attr: torch.Tensor,
@@ -262,7 +262,7 @@ class Evaluator:
         num_nodes: int,
         num_detectors: int,
     ) -> tuple[int, int]:
-        """Evaluate logical_head: direct observable prediction."""
+        """Evaluate direct case: observable prediction from graph-level logits."""
         n = syndrome.shape[0]
         num_errors = 0
 
@@ -383,8 +383,8 @@ class Evaluator:
                 )
                 continue
 
-            if self.case == "logical_head":
-                num_shots, num_errors = self._eval_logical_head(
+            if self.case == "direct":
+                num_shots, num_errors = self._eval_direct(
                     ei,
                     ea,
                     syndrome,

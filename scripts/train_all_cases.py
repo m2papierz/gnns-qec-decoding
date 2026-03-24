@@ -1,4 +1,4 @@
-"""Generate dataset and train all 4 cases.
+"""Generate dataset and train all cases.
 
 Runs data generation once, then invokes train_gnn.py for each case
 as a subprocess so that logging, torch.compile caches, and GPU state
@@ -13,7 +13,7 @@ Examples
     uv run scripts/train_all_cases.py --skip-datagen
 
     # Train only specific cases
-    uv run scripts/train_all_cases.py --cases logical_head hybrid
+    uv run scripts/train_all_cases.py --cases direct edge
 
     # Use compiled backend for training
     uv run scripts/train_all_cases.py --backend compiled

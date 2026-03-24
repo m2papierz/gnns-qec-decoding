@@ -2,8 +2,8 @@
 
 Examples
 --------
-    uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt
-    uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \\
+    uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt
+    uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt \\
         --baseline outputs/results/mwpm_baseline.json
 """
 

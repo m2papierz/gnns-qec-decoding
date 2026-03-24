@@ -7,16 +7,16 @@ Examples
 --------
     # Benchmark pytorch vs compiled vs tensorrt
     uv run scripts/export_trt.py \\
-        --checkpoint outputs/runs/logical_head/best.pt
+        --checkpoint outputs/runs/direct/best.pt
 
     # Only pytorch and compiled (no torch-tensorrt needed)
     uv run scripts/export_trt.py \\
-        --checkpoint outputs/runs/hybrid/best.pt \\
+        --checkpoint outputs/runs/edge/best.pt \\
         --backends pytorch compiled
 
     # Custom batch size and iterations
     uv run scripts/export_trt.py \\
-        --checkpoint outputs/runs/logical_head/best.pt \\
+        --checkpoint outputs/runs/direct/best.pt \\
         --n-graphs 8 --n-iters 200
 """
 

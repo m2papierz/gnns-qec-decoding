@@ -8,8 +8,8 @@ An end-to-end project on decoding topological quantum error-correcting codes wit
 > ### What works
 > - [x] Dataset generation pipeline (raw + processed)
 > - [x] MWPM baseline evaluation + sanity checks
-> - [x] GNN `logical_head` training & evaluation (research-grade, not yet optimized)
-> - [x] GNN `hybrid` training & evaluation (research-grade, not yet optimized)
+> - [x] GNN `direct` training & evaluation (research-grade, not yet optimized)
+> - [x] GNN `edge` training & evaluation (research-grade, not yet optimized)
 > - [x] Swappable compute backend (`pytorch`, `compiled`, `cuda`)
 > - [x] Pluggable decoder interface (`decoders/`)
 > - [x] Custom CUDA kernels for hot paths (symmetric edge features, fused norm+residual, graph-normalized BCE)
@@ -54,8 +54,8 @@ Stim's detector error model (DEM) describes which physical faults trigger which 
 
 | Mode | What the GNN predicts | Why |
 |------|----------------------|-----|
-| `logical_head` | Observable flip directly from the graph + syndrome | Simplest end-to-end approach |
-| `hybrid` | New edge weights fed back into MWPM | Can outperform MWPM by learning a better noise model |
+| `direct` | Observable flip directly from the graph + syndrome | Simplest end-to-end approach |
+| `edge` | New edge weights fed back into MWPM | Can outperform MWPM by learning a better noise model |
 
 A third mode, `bp_teacher` (soft per-edge marginals from belief propagation via CUDA-Q), is planned.
 
@@ -93,7 +93,7 @@ uv run scripts/data_generation.py -c configs/data_generation.yaml
 uv run scripts/data_generation.py --mode raw-only
 
 # Specific cases with verbose logging
-uv run scripts/data_generation.py --cases logical_head hybrid -v
+uv run scripts/data_generation.py --cases direct edge -v
 ```
 
 See [`src/qec_generator/README.md`](src/qec_generator/README.md) for
@@ -121,15 +121,15 @@ The script reports a per-setting LER table, summary statistics by distance, an e
 Train a GNN decoder and evaluate against the MWPM baseline:
 
 ```bash
-# Train (start with logical_head)
+# Train (start with direct)
 uv run scripts/train_gnn.py -c configs/train.yaml
 
 # Override case or backend
-uv run scripts/train_gnn.py -c configs/train.yaml --case hybrid
+uv run scripts/train_gnn.py -c configs/train.yaml --case edge
 uv run scripts/train_gnn.py -c configs/train.yaml --backend compiled
 
 # Evaluate with MWPM comparison
-uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \
+uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt \
     --baseline outputs/results/mwpm_baseline.json
 ```
 
@@ -148,14 +148,14 @@ Then benchmark inference across backends:
 
 ```bash
 # All backends (requires torch-tensorrt for TRT)
-uv run scripts/export_trt.py --checkpoint outputs/runs/logical_head/best.pt
+uv run scripts/export_trt.py --checkpoint outputs/runs/direct/best.pt
 
 # PyTorch and compiled only
-uv run scripts/export_trt.py --checkpoint outputs/runs/logical_head/best.pt \
+uv run scripts/export_trt.py --checkpoint outputs/runs/direct/best.pt \
     --backends pytorch compiled
 
 # Custom batch size
-uv run scripts/export_trt.py --checkpoint outputs/runs/hybrid/best.pt \
+uv run scripts/export_trt.py --checkpoint outputs/runs/edge/best.pt \
     --n-graphs 8 --n-iters 200
 ```
 

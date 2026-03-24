@@ -56,7 +56,7 @@ uv run scripts/data_generation.py -c configs/data_generation.yaml
 uv run scripts/data_generation.py --mode raw-only
 
 # Specific cases with verbose logging
-uv run scripts/data_generation.py --cases logical_head hybrid -v
+uv run scripts/data_generation.py --cases direct edge -v
 
 # Overwrite existing data
 uv run scripts/data_generation.py --overwrite
@@ -73,7 +73,7 @@ cfg = Config.from_yaml("configs/data_generation.yaml")
 generate_raw_data(cfg)
 
 # Step 2: package for ML
-generate_datasets(cfg, cases=("logical_head", "hybrid"))
+generate_datasets(cfg, cases=("direct", "edge"))
 ```
 
 ## Configuration (YAML)
@@ -144,8 +144,8 @@ data/datasets/{case}/
 │       │   └── graph_meta.json
 │       ├── {split}_syndrome.npy
 │       ├── {split}_logical.npy
-│       ├── {split}_mwpm_edge_selected_packed.npy   # hybrid only
-│       └── mwpm/                                    # hybrid only
+│       ├── {split}_mwpm_edge_selected_packed.npy   # edge only
+│       └── mwpm/                                    # edge only
 │           ├── undirected_edge_endpoints.npy
 │           ├── dir_to_undir.npy
 │           └── teacher_meta.json
@@ -161,8 +161,8 @@ All cases share identical raw samples — only the supervision differs.
 
 | Case | Labels included | Purpose |
 |---|---|---|
-| `logical_head` | `logical` | Train model to predict logical errors directly |
-| `hybrid` | `logical` + MWPM edge labels | GNN learns better edge weights fed back into decoder |
+| `direct` | `logical` | Train model to predict logical errors directly |
+| `edge` | `logical` + MWPM edge labels | GNN learns better edge weights fed back into decoder |
 
 ## Module layout
 

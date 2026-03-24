@@ -8,8 +8,8 @@ SPLITS = ("train", "val", "test")
 Split = Literal["train", "val", "test"]
 
 # Dataset cases/variants
-CASES = ("logical_head", "hybrid")
-Case = Literal["logical_head", "hybrid"]
+CASES = ("direct", "edge")
+Case = Literal["direct", "edge"]
 
 # File extensions
 NPY_EXT = ".npy"

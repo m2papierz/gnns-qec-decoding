@@ -41,7 +41,7 @@ class TrainConfig:
     Attributes
     ----------
     case : str
-        Training case: ``"logical_head"`` or ``"hybrid"``.
+        Training case: ``"direct"`` or ``"edge"``.
     datasets_dir : Path
         Root directory of packaged datasets.
     output_dir : Path
@@ -64,7 +64,7 @@ class TrainConfig:
         DataLoader worker processes.
     edge_pos_weight : float or None
         Positive-class weight for edge BCE loss.  If None, estimated
-        from training data.  Only used for ``hybrid``.
+        from training data.  Only used for ``edge``.
     max_grad_norm : float
         Maximum gradient norm for clipping.
     patience : int
@@ -84,7 +84,7 @@ class TrainConfig:
         ``torch.compile`` mode (only used when backend is ``"compiled"``).
     """
 
-    case: Case = "logical_head"
+    case: Case = "direct"
     datasets_dir: Path = Path("data/datasets")
     output_dir: Path = Path("outputs/runs")
     hidden_dim: int = 64
@@ -199,7 +199,7 @@ def _build_criterion(
     device: torch.device | None = None,
 ) -> nn.Module:
     """Build the loss function for a given training case."""
-    if case == "logical_head":
+    if case == "direct":
         return nn.BCEWithLogitsLoss()
     pw = torch.tensor([pos_weight], device=device) if pos_weight is not None else None
     return _GraphNormalizedBCE(pos_weight=pw)
@@ -389,7 +389,7 @@ class Trainer:
     def _setup_criterion(self) -> None:
         """Build loss function, estimating pos_weight if needed."""
         pos_weight = self.cfg.edge_pos_weight
-        if self.cfg.case != "logical_head" and pos_weight is None:
+        if self.cfg.case != "direct" and pos_weight is None:
             pos_weight = _estimate_edge_pos_weight(self.train_loader)
 
         self.criterion = _build_criterion(
@@ -473,7 +473,7 @@ class Trainer:
                 enabled=use_amp,
             ):
                 logits = self.model(batch)
-                if self.cfg.case == "logical_head":
+                if self.cfg.case == "direct":
                     loss = self.criterion(logits.view(-1), batch.y)
                 else:
                     loss = self.criterion(logits, batch.y, batch)
@@ -487,7 +487,7 @@ class Trainer:
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
-            if self.cfg.case == "logical_head":
+            if self.cfg.case == "direct":
                 with torch.no_grad():
                     pred = (logits > 0.0).float()
                     target_2d = batch.y.view_as(pred)
@@ -500,7 +500,7 @@ class Trainer:
         metrics: Dict[str, float] = {
             "loss": total_loss / max(num_batches, 1),
         }
-        if self.cfg.case == "logical_head" and total_graphs > 0:
+        if self.cfg.case == "direct" and total_graphs > 0:
             metrics["ler"] = total_errors / total_graphs
 
         return metrics
@@ -513,7 +513,7 @@ class Trainer:
         Returns
         -------
         dict
-            Validation metrics: ``loss`` always; ``ler`` for logical_head;
+            Validation metrics: ``loss`` always; ``ler`` for direct;
             ``edge_auc`` for edge cases.
         """
         self.model.eval()
@@ -534,12 +534,12 @@ class Trainer:
                 enabled=use_amp,
             ):
                 logits = self.model(batch)
-                if self.cfg.case == "logical_head":
+                if self.cfg.case == "direct":
                     loss = self.criterion(logits.view(-1), batch.y)
                 else:
                     loss = self.criterion(logits, batch.y, batch)
 
-            if self.cfg.case == "logical_head":
+            if self.cfg.case == "direct":
                 pred = (logits > 0.0).float()
                 target_2d = batch.y.view_as(pred)
                 total_graphs += pred.shape[0]
@@ -554,9 +554,9 @@ class Trainer:
         metrics: Dict[str, float] = {
             "loss": total_loss / max(num_batches, 1),
         }
-        if self.cfg.case == "logical_head" and total_graphs > 0:
+        if self.cfg.case == "direct" and total_graphs > 0:
             metrics["ler"] = total_errors / total_graphs
-        if self.cfg.case != "logical_head" and all_logits:
+        if self.cfg.case != "direct" and all_logits:
             scores = np.concatenate(all_logits)
             targets = np.concatenate(all_targets)
             metrics["edge_auc"] = _roc_auc_score(targets, scores)
@@ -603,7 +603,7 @@ class Trainer:
         self._maybe_resume()
         self._save_config()
 
-        metric_key = "ler" if self.cfg.case == "logical_head" else "loss"
+        metric_key = "ler" if self.cfg.case == "direct" else "loss"
         epochs_without_improvement = 0
 
         logger.info(

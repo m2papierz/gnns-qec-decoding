@@ -60,7 +60,7 @@ Set via `QECDEC_BACKEND` env var or `set_backend()` at runtime.
 3. Mean pooling over edge embeddings per graph => `(B, H)`
 4. Concatenate all three => two-layer MLP => `(B, num_observables)` logits
 
-**EdgeHead** — per-edge prediction (used by `hybrid`):
+**EdgeHead** — per-edge prediction (used by `edge`):
 1. Symmetric node pair: `[h_u + h_v, |h_u − h_v|, edge_h]` => `(E, 3H)`
 2. Two-layer MLP => `(E,)` logits
 
@@ -69,11 +69,11 @@ Set via `QECDEC_BACKEND` env var or `set_backend()` at runtime.
 ```python
 from gnn.models import build_model
 
-model = build_model("logical_head", hidden_dim=64, num_layers=4)
-model = build_model("hybrid", hidden_dim=64, num_layers=4)
+model = build_model("direct", hidden_dim=64, num_layers=4)
+model = build_model("edge", hidden_dim=64, num_layers=4)
 ```
 
-`hybrid` uses `EdgeHead` — it differs from `logical_head` in loss
+`edge` uses `EdgeHead` — it differs from `direct` in loss
 computation, label format, and evaluation protocol.
 
 ## Decoders (`decoders/`)
@@ -97,20 +97,20 @@ The evaluator selects a decoder via `--decoder-type`.
 uv run scripts/train_gnn.py -c configs/train.yaml
 
 # Override case and epochs
-uv run scripts/train_gnn.py -c configs/train.yaml --case hybrid --epochs 50
+uv run scripts/train_gnn.py -c configs/train.yaml --case edge --epochs 50
 
 # Use torch.compile backend
 uv run scripts/train_gnn.py -c configs/train.yaml --backend compiled
 
 # Pure CLI (no config file)
-uv run scripts/train_gnn.py --case logical_head --epochs 50
+uv run scripts/train_gnn.py --case direct --epochs 50
 
 # Custom hyperparameters
 uv run scripts/train_gnn.py -c configs/train.yaml \
     --hidden-dim 32 --num-layers 2 --lr 5e-4 --batch-size 128
 
 # Resume from checkpoint
-uv run scripts/train_gnn.py -c configs/train.yaml --resume outputs/runs/logical_head/best.pt
+uv run scripts/train_gnn.py -c configs/train.yaml --resume outputs/runs/direct/best.pt
 ```
 
 ### Configuration
@@ -120,7 +120,7 @@ override config values, so the YAML file acts as the base and CLI
 flags provide per-run tweaks.
 
 ```yaml
-case: "logical_head"
+case: "direct"
 backend: "pytorch"          # "pytorch" | "compiled" | "cuda"
 compile_mode: "reduce-overhead"
 model:
@@ -140,8 +140,8 @@ Programmatic access: `TrainConfig.from_yaml("configs/train.yaml")`.
 
 | Case | Loss | Details |
 |------|------|---------|
-| `logical_head` | `BCEWithLogitsLoss` | Graph-level: logits vs observable ground truth |
-| `hybrid` | `_GraphNormalizedBCE` + `pos_weight` | Per-edge BCE averaged within each graph, then across graphs. Prevents larger graphs (higher `d`) from dominating gradients. `pos_weight` auto-estimated from training data |
+| `direct` | `BCEWithLogitsLoss` | Graph-level: logits vs observable ground truth |
+| `edge` | `_GraphNormalizedBCE` + `pos_weight` | Per-edge BCE averaged within each graph, then across graphs. Prevents larger graphs (higher `d`) from dominating gradients. `pos_weight` auto-estimated from training data |
 
 ### Training details
 
@@ -150,7 +150,7 @@ Programmatic access: `TrainConfig.from_yaml("configs/train.yaml")`.
 - **Mixed precision**: AMP enabled automatically on CUDA (GradScaler + autocast)
 - **Data loading**: persistent workers + prefetch for reduced overhead
 - **Checkpointing**: saves `best.pt` when validation metric improves
-  - `logical_head`: tracks validation LER (lower is better)
+  - `direct`: tracks validation LER (lower is better)
   - edge cases: tracks validation loss (lower is better)
 - **Reproducibility**: `--seed` sets Python, NumPy, and PyTorch RNGs
 
@@ -183,25 +183,25 @@ outputs/runs/{case}/
 
 ```bash
 # Evaluate (case inferred from checkpoint)
-uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt
+uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt
 
 # Compare with MWPM baseline
-uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \
+uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt \
     --baseline outputs/results/mwpm_baseline.json
 
 # Save report
-uv run scripts/eval_gnn.py --checkpoint outputs/runs/logical_head/best.pt \
+uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt \
     --baseline outputs/results/mwpm_baseline.json \
     -o outputs/results/gnn_logical.json
 ```
 
 ### Evaluation protocols
 
-**`logical_head`**: for each shot, run the model on (graph, syndrome),
+**`direct`**: for each shot, run the model on (graph, syndrome),
 threshold the logit at 0 => predicted observable. Compare with ground
 truth. Report LER per setting.
 
-**`hybrid`**: for each setting, collect per-edge logits across all
+**`edge`**: for each setting, collect per-edge logits across all
 shots, build an MWPM decoder from the GNN-predicted weights, decode
 all syndromes, compare with ground truth.
 
@@ -232,7 +232,7 @@ Each `__getitem__` returns a PyG `Data` with:
 | `x` | `(N, 1)` | Syndrome bits (0/1 float), boundary node = 0 |
 | `edge_index` | `(2, E)` | Directed COO (both directions stored) |
 | `edge_attr` | `(E, 2)` | `[error_prob, weight]` |
-| `y` | varies | `(num_obs,)` for logical_head; `(E,)` binary edge labels for hybrid |
+| `y` | varies | `(num_obs,)` for direct; `(E,)` binary edge labels for edge |
 | `logical` | `(num_obs,)` | Always present for evaluation |
 | `setting_id` | scalar | Setting index for debugging |
 

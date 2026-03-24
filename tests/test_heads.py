@@ -113,7 +113,7 @@ class TestEdgeHead:
 class TestQECDecoder:
     """Tests for the full encoder + head pipeline."""
 
-    @pytest.mark.parametrize("case", ["logical_head", "hybrid"])
+    @pytest.mark.parametrize("case", ["direct", "edge"])
     def test_forward_runs(self, case: str, batched: Batch) -> None:
         model = build_model(
             case,
@@ -127,9 +127,9 @@ class TestQECDecoder:
         assert logits is not None
         assert logits.ndim >= 1
 
-    def test_logical_head_output_shape(self, batched: Batch) -> None:
+    def test_direct_output_shape(self, batched: Batch) -> None:
         model = build_model(
-            "logical_head",
+            "direct",
             hidden_dim=32,
             num_layers=2,
             dropout=0.0,
@@ -141,7 +141,7 @@ class TestQECDecoder:
 
     def test_edge_head_output_shape(self, batched: Batch) -> None:
         model = build_model(
-            "hybrid",
+            "edge",
             hidden_dim=32,
             num_layers=2,
             dropout=0.0,
@@ -154,7 +154,7 @@ class TestQECDecoder:
 
     def test_backward_pass(self, batched: Batch) -> None:
         model = build_model(
-            "logical_head",
+            "direct",
             hidden_dim=32,
             num_layers=2,
             dropout=0.0,
@@ -173,12 +173,12 @@ class TestBuildModel:
             build_model("nonexistent")  # type: ignore[arg-type]
 
     def test_returns_qec_decoder(self) -> None:
-        model = build_model("logical_head")
+        model = build_model("direct")
         assert isinstance(model, QECDecoder)
 
     def test_encoder_config_propagates(self) -> None:
         model = build_model(
-            "logical_head",
+            "direct",
             hidden_dim=64,
             num_layers=4,
             node_dim=3,
@@ -187,14 +187,14 @@ class TestBuildModel:
         assert model.encoder.num_layers == 4
         assert model.encoder.node_dim == 3
 
-    def test_logical_head_observables(self) -> None:
+    def test_direct_observables(self) -> None:
         model = build_model(
-            "logical_head",
+            "direct",
             hidden_dim=32,
             num_observables=5,
         )
         assert isinstance(model.head, LogicalHead)
 
-    def test_hybrid_uses_edge_head(self) -> None:
-        model = build_model("hybrid", hidden_dim=32)
+    def test_edge_uses_edge_head(self) -> None:
+        model = build_model("edge", hidden_dim=32)
         assert isinstance(model.head, EdgeHead)

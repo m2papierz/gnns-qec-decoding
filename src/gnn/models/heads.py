@@ -8,7 +8,7 @@ Two head architectures cover the training modes:
 - :class:`EdgeHead` — per-edge binary prediction using learned edge
   embeddings from the encoder.
 
-The ``hybrid`` case uses :class:`EdgeHead`; ``logical_head`` uses
+The ``edge`` case uses :class:`EdgeHead`; ``direct`` uses
 :class:`LogicalHead`.
 """
 
@@ -210,12 +210,12 @@ def build_model(
 
     Parameters
     ----------
-    case : {"logical_head", "hybrid"}
+    case : {"direct", "edge"}
         Training case.  Determines which head is attached.
     node_dim, edge_dim, hidden_dim, num_layers, dropout
         Encoder architecture parameters.
     num_observables : int
-        Logical observables (only used for ``logical_head``).
+        Logical observables (only used for ``direct``).
 
     Returns
     -------
@@ -229,20 +229,20 @@ def build_model(
         dropout=dropout,
     )
 
-    if case == "logical_head":
+    if case == "direct":
         head: nn.Module = LogicalHead(
             hidden_dim=hidden_dim,
             num_observables=num_observables,
             dropout=dropout,
         )
-    elif case == "hybrid":
+    elif case == "edge":
         head = EdgeHead(
             hidden_dim=hidden_dim,
             dropout=dropout,
         )
     else:
         raise ValueError(
-            f"Unknown case {case!r}. " f"Expected one of: 'logical_head', 'hybrid'"
+            f"Unknown case {case!r}. " f"Expected one of: 'direct', 'edge'"
         )
 
     return QECDecoder(encoder, head)
