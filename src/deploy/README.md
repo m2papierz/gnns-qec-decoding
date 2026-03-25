@@ -16,20 +16,20 @@ All backends accept the same `torch_geometric.data.Batch` input and produce nume
 
 ```bash
 # Benchmark all backends on a trained checkpoint
-uv run scripts/export_trt.py --checkpoint outputs/runs/direct/best.pt
+uv run src/deploy/export_trt.py --checkpoint outputs/runs/direct/best.pt
 
 # Skip TensorRT (no torch-tensorrt needed)
-uv run scripts/export_trt.py \
+uv run src/deploy/export_trt.py \
     --checkpoint outputs/runs/edge/best.pt \
     --backends pytorch compiled
 
 # Custom batch geometry and iteration count
-uv run scripts/export_trt.py \
+uv run src/deploy/export_trt.py \
     --checkpoint outputs/runs/edge/best.pt \
     --n-graphs 8 --n-nodes 100 --n-edges 240 --n-iters 200
 
 # FP32 TensorRT (tighter tolerance, lower speedup)
-uv run scripts/export_trt.py \
+uv run src/deploy/export_trt.py \
     --checkpoint outputs/runs/direct/best.pt \
     --precision fp32
 ```
@@ -89,7 +89,7 @@ GNNs mix dense ops (MLP projections, LayerNorm) with sparse graph ops (scatter, 
 
 1. Traces the model graph via `torch.compile`
 2. Identifies contiguous subgraphs where all ops are TRT-convertible
-3. Subgraphs with ≥ `min_block_size` ops become TRT engines
+3. Subgraphs with >= `min_block_size` ops become TRT engines
 4. Remaining ops (GINEConv, scatter_add, softmax over graph) stay as PyTorch
 
 This means no manual model surgery is needed — the same `QECDecoder` works across all backends.

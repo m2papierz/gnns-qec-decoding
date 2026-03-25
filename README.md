@@ -144,7 +144,7 @@ hyperparameters, training modes, and evaluation protocols.
 
 ## Deployment and benchmarking
 
-Train all cases (generates data if needed, ~1-2h total on RTX 4080 Laptop):
+Train all cases:
 
 ```bash
 uv run scripts/train_all_cases.py -v
@@ -154,21 +154,19 @@ Then benchmark inference across backends:
 
 ```bash
 # All backends (requires torch-tensorrt for TRT)
-uv run scripts/export_trt.py --checkpoint outputs/runs/direct/best.pt
+uv run src/deploy/export_trt.py --checkpoint outputs/runs/direct/best.pt
 
 # PyTorch and compiled only
-uv run scripts/export_trt.py --checkpoint outputs/runs/direct/best.pt \
+uv run src/deploy/export_trt.py --checkpoint outputs/runs/direct/best.pt \
     --backends pytorch compiled
 
 # Custom batch size
-uv run scripts/export_trt.py --checkpoint outputs/runs/edge/best.pt \
+uv run src/deploy/export_trt.py --checkpoint outputs/runs/edge/best.pt \
     --n-graphs 8 --n-iters 200
 ```
 
-The TensorRT backend uses `torch.compile` with the `torch_tensorrt` backend,
-which automatically partitions the GNN: dense subgraphs (MLP, Linear,
-LayerNorm) are lowered to TRT engines, while sparse ops (scatter, gather)
-remain in PyTorch.  Requires `pip install torch-tensorrt`.
+The TensorRT backend uses `torch.compile` with the `torch_tensorrt` backend, which automatically partitions the GNN: dense subgraphs (MLP, Linear, LayerNorm) are lowered to TRT engines, while sparse ops (scatter, gather) remain in PyTorch.
 
-See [`src/deploy/README.md`](src/deploy/README.md) for Python API,
-benchmark output format, and details on TRT graph partitioning.
+See [`src/deploy/README.md`](src/deploy/README.md) for Python API, benchmark output format, and details on TRT graph partitioning.
+
+See [`src/kernels/README.md`](src/kernels/README.md) for custom CUDA kernels used with the `cuda` compute backend.

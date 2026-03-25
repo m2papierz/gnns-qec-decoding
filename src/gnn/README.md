@@ -22,9 +22,7 @@ Batch ──► encoder ──►(h, edge_h)                                    
 
 ### Encoder (`models/encoder.py`)
 
-`DetectorGraphEncoder` runs several rounds of GINEConv message passing
-on the detector graph with explicit edge co-evolution: each layer
-updates both node embeddings and edge embeddings.
+`DetectorGraphEncoder` runs several rounds of GINEConv message passing on the detector graph with explicit edge co-evolution: each layer updates both node embeddings and edge embeddings.
 
 | Component | Choice | Rationale |
 |-----------|--------|-----------|
@@ -41,8 +39,7 @@ Input/output:
 
 ### Swappable compute operations (`models/ops.py`)
 
-The encoder and heads forward passes delegate compute-intensive patterns
-to `gnn.models.ops`, which dispatches to one of three backends:
+The encoder and heads forward passes delegate compute-intensive patterns to `gnn.models.ops`, which dispatches to one of three backends:
 
 | Backend | Description |
 |---------|-------------|
@@ -69,8 +66,8 @@ Set via `QECDEC_BACKEND` env var or `set_backend()` at runtime.
 ```python
 from gnn.models import build_model
 
-model = build_model("direct", hidden_dim=64, num_layers=4)
-model = build_model("edge", hidden_dim=64, num_layers=4)
+model = build_model("direct", hidden_dim=128, num_layers=6)
+model = build_model("edge", hidden_dim=128, num_layers=6)
 ```
 
 `edge` uses `EdgeHead` — it differs from `direct` in loss
@@ -112,30 +109,36 @@ uv run scripts/train_gnn.py -c configs/train.yaml \
 
 # Resume from checkpoint
 uv run scripts/train_gnn.py -c configs/train.yaml --resume outputs/runs/direct/best.pt
+
+# Train all cases (data generation + direct + edge)
+uv run scripts/train_all_cases.py -v
 ```
 
 ### Configuration
 
-All hyperparameters are set in `configs/train.yaml`.  CLI arguments
-override config values, so the YAML file acts as the base and CLI
-flags provide per-run tweaks.
+All hyperparameters are set in `configs/train.yaml`.  CLI arguments override config values, so the YAML file acts as the base and CLI flags provide per-run tweaks.
 
 ```yaml
 case: "direct"
-backend: "pytorch"          # "pytorch" | "compiled" | "cuda"
+backend: "compiled"         # "pytorch" | "compiled" | "cuda"
 compile_mode: "reduce-overhead"
 model:
-  hidden_dim: 64
-  num_layers: 4
+  hidden_dim: 128
+  num_layers: 6
   dropout: 0.1
 optimisation:
-  lr: 1.0e-3
-  epochs: 100
-  batch_size: 64
+  lr: 1.5e-4
+  weight_decay: 1.0e-5
+  epochs: 750
+  batch_size: 128
+patience: 75
+val_every: 5
 seed: 42
 ```
 
 Programmatic access: `TrainConfig.from_yaml("configs/train.yaml")`.
+
+`train_all_cases.py` uses a lower LR (`1.0e-4`) for the `edge` case via CLI override — the MSE loss landscape is smoother than BCE and converges better at a lower learning rate.
 
 ### Loss functions
 
@@ -146,13 +149,13 @@ Programmatic access: `TrainConfig.from_yaml("configs/train.yaml")`.
 
 ### Training details
 
-- **Optimiser**: AdamW (lr=1e-3, weight_decay=1e-4)
+- **Optimiser**: AdamW (weight_decay configurable, default 1e-5)
 - **Scheduler**: Linear warmup (5% of epochs, from 1% of peak lr) followed by cosine annealing to lr/50
 - **Mixed precision**: AMP enabled automatically on CUDA (GradScaler + autocast)
 - **Data loading**: persistent workers + prefetch for reduced overhead
 - **Checkpointing**: saves `best.pt` when validation metric improves
   - `direct`: tracks validation LER (lower is better)
-  - edge cases: tracks validation loss (lower is better)
+  - `edge`: tracks validation loss (lower is better)
 - **Reproducibility**: `--seed` sets Python, NumPy, and PyTorch RNGs
 
 ### Outputs
@@ -166,8 +169,10 @@ outputs/runs/{case}/
 
 ### Hyperparameter defaults
 
-| Parameter | Default | Notes |
-|-----------|---------|-------|
+These are the code defaults in `TrainConfig`.  The shipped `configs/train.yaml` overrides several of them (see Configuration above).
+
+| Parameter | Code default | Notes |
+|-----------|-------------|-------|
 | `hidden_dim` | 64 | Embedding dimensionality |
 | `num_layers` | 4 | Message-passing depth |
 | `dropout` | 0.1 | Applied in encoder and heads |
@@ -210,10 +215,7 @@ uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt \
 threshold the logit at 0 => predicted observable. Compare with ground
 truth. Report LER per setting.
 
-**`edge`**: for each setting, collect per-edge logits across all
-shots, build a decoder from the GNN-predicted weights, decode
-all syndromes, compare with ground truth. The decoder backend is
-selected via `--decoder`:
+**`edge`**: for each setting, collect per-edge logits across all shots, build a decoder from the GNN-predicted weights, decode all syndromes, compare with ground truth. The decoder backend is selected via `--decoder`:
 
 - `mwpm` (default): GNN edge logits => sigmoid => MWPM weights => PyMatching decode
 - `bp_osd`: GNN edge logits => sigmoid => error probabilities => CUDA-Q BP+OSD decode => project onto observables via `observable_flips` mask
@@ -229,14 +231,11 @@ selected via `--decoder`:
 GNN better in 12/108 settings (marked with *)
 ```
 
-JSON reports follow the same schema as the MWPM baseline, with added
-`mwpm_ler` field per setting.
+JSON reports follow the same schema as the MWPM baseline, with added `mwpm_ler` field per setting.
 
 ## Dataset interface
 
-The training and evaluation code consumes data from
-`MixedSurfaceCodeDataset` (defined in `dataset.py`), which reads the
-packaged shards produced by `qec_generator`.
+The training and evaluation code consumes data from `MixedSurfaceCodeDataset` (defined in `dataset.py`), which reads the packaged shards produced by `qec_generator`.
 
 Each `__getitem__` returns a PyG `Data` with:
 
@@ -249,5 +248,4 @@ Each `__getitem__` returns a PyG `Data` with:
 | `logical` | `(num_obs,)` | Always present for evaluation |
 | `setting_id` | scalar | Setting index for debugging |
 
-Important: do not move graph tensors to GPU in the dataset (breaks
-`num_workers > 0`).  The training loop calls `batch.to(device)`.
+Important: do not move graph tensors to GPU in the dataset (breaks `num_workers > 0`).  The training loop calls `batch.to(device)`.

@@ -10,41 +10,28 @@ into a reproducible pipeline that produces ready-to-train NumPy shards.
 
 ### Surface code memory experiment
 
-`stim.Circuit.generated("surface_code:rotated_memory_x", ...)` creates a
-*rotated surface code memory-X experiment*: the logical qubit is
-initialised and measured in the X basis.  During the experiment,
-stabiliser measurements run for a configurable number of **rounds**
-(syndrome extraction cycles).
+`stim.Circuit.generated("surface_code:rotated_memory_x", ...)` creates a *rotated surface code memory-X experiment*: the logical qubit is initialised and measured in the X basis.  During the experiment, stabiliser measurements run for a configurable number of **rounds** (syndrome extraction cycles).
 
 ### Detector error model (DEM)
 
-A DEM captures which physical faults trigger which *detectors*
-(differences between consecutive stabiliser outcomes) and which flip
-*observables* (the logical measurement).  The module calls
-`circuit.detector_error_model(decompose_errors=True)` to obtain a
-graph-like DEM suitable for matching.
+A DEM captures which physical faults trigger which *detectors* (differences between consecutive stabiliser outcomes) and which flip *observables* (the logical measurement).  The module calls `circuit.detector_error_model(decompose_errors=True)` to obtain a graph-like DEM suitable for matching.
 
 ### Detector / decoding graph
 
-PyMatching converts the DEM into a weighted graph where nodes are
-detectors and edges carry error probabilities and MWPM weights.  The
-module adds a single **virtual boundary node** (index = `num_detectors`)
-that collapses all boundary edges, making the graph structure stable
-across settings.
+PyMatching converts the DEM into a weighted graph where nodes are detectors and edges carry error probabilities and MWPM weights.  The module adds a single **virtual boundary node** (index = `num_detectors`) that collapses all boundary edges, making the graph structure stable across settings.
+
+Per-edge **observable flip masks** are extracted from the DEM and stored alongside the graph.  These indicate which logical observables are flipped when a given edge's error occurs — required by BP+OSD decoding.
 
 ### Labels
 
 | Label | Source | Use case |
 |---|---|---|
 | `logical` | Stim simulation ground truth | Direct logical-error prediction |
-| `mwpm_edge_selected_packed` | PyMatching MWPM solution | Teacher / distillation supervision |
+| `bp_soft_labels` | Sum-product belief propagation marginals | Edge model supervision (continuous P(e=1 \| syndrome) per edge) |
 
 ### Rounds
 
-`rounds` controls how many stabiliser measurement cycles run in each
-memory experiment.  More rounds => longer temporal axis => more detectors
-and edges.  By default the pipeline generates `rounds ∈ {d, 2·d}` for
-each distance `d`.  Override this via `rounds:` in the YAML config.
+`rounds` controls how many stabiliser measurement cycles run in each memory experiment. More rounds => longer temporal axis => more detectors and edges.
 
 ## Quick start
 
@@ -84,8 +71,7 @@ surface_code:
   distances: [3, 5, 7]
   error_probs: [0.001, 0.005, 0.01]
 
-  # Optional — omit to auto-generate [d, 2*d] per distance.
-  # rounds: [3, 5, 6, 7, 10, 14]
+  rounds: [3, 5, 7]
 
   num_samples:
     train: 15000
@@ -124,6 +110,7 @@ data/raw_data/
     │   ├── edge_weight.npy       # (E,) float32 — MWPM weight
     │   ├── node_coords.npy       # (N, C) float32
     │   ├── node_is_boundary.npy  # (N,) bool
+    │   ├── observable_flips.npy  # (E, num_obs) bool — per-edge observable mask
     │   └── meta.json
     ├── {split}_syndrome.npy      # (S, D) uint8
     ├── {split}_logical.npy       # (S, O) uint8
@@ -137,15 +124,16 @@ data/datasets/{case}/
 ├── shards/
 │   └── d{distance}_r{rounds}_p{error_prob}/
 │       ├── graph/
-│       │   ├── edge_index.npy       # (2, E) int64
-│       │   ├── edge_attr.npy        # (E, 2) float32 [error_prob, weight]
-│       │   ├── node_coords.npy      # (N, C) float32
-│       │   ├── node_is_boundary.npy # (N,) bool
+│       │   ├── edge_index.npy          # (2, E) int64
+│       │   ├── edge_attr.npy           # (E, 2) float32 [error_prob, weight]
+│       │   ├── node_coords.npy         # (N, C) float32
+│       │   ├── node_is_boundary.npy    # (N,) bool
+│       │   ├── observable_flips.npy    # (E, num_obs) bool
 │       │   └── graph_meta.json
 │       ├── {split}_syndrome.npy
 │       ├── {split}_logical.npy
-│       ├── {split}_mwpm_edge_selected_packed.npy   # edge only
-│       └── mwpm/                                    # edge only
+│       ├── {split}_bp_soft_labels.npy  # edge only — (S, U) float32
+│       └── mwpm/                       # edge only
 │           ├── undirected_edge_endpoints.npy
 │           ├── dir_to_undir.npy
 │           └── teacher_meta.json
@@ -162,18 +150,20 @@ All cases share identical raw samples — only the supervision differs.
 | Case | Labels included | Purpose |
 |---|---|---|
 | `direct` | `logical` | Train model to predict logical errors directly |
-| `edge` | `logical` + MWPM edge labels | GNN learns better edge weights fed back into decoder |
+| `edge` | `logical` + BP marginals (soft labels) | GNN learns per-edge error probabilities fed back into a decoder |
 
 ## Module layout
 
 ```
 src/qec_generator/
 ├── __init__.py        # Public API
-├── _constants.py      # Shared constants (splits, cases, defaults)
+├── bp.py              # Sum-product belief propagation (vectorised, batch-capable)
 ├── config.py          # YAML => Config dataclass
 ├── sampler.py         # Stim circuit building and sampling
-├── graph.py           # DEM => DetectorGraph conversion
+├── graph.py           # DEM => DetectorGraph conversion (incl. observable_flips)
 ├── datasets.py        # Raw => ML-ready shards + global indices
 ├── utils.py           # I/O helpers, deterministic seeding
 └── py.typed           # PEP 561 marker
 ```
+
+Project-level constants (`CASES`, `SPLITS`, etc.) live in `src/constants.py`.
