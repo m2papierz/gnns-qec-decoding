@@ -151,7 +151,7 @@ class TestEdgeMeanPool:
         edge_h = torch.randn(5, 4)
         edge_batch = torch.zeros(5, dtype=torch.long)
         out = edge_mean_pool(edge_h, edge_batch, n_graphs=2)
-        # Graph 1 has no edges → should be 0 (clamped division)
+        # Graph 1 has no edges => should be 0 (clamped division)
         assert out.shape == (2, 4)
         torch.testing.assert_close(out[1], torch.zeros(4))
 

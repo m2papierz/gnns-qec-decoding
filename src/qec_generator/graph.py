@@ -22,7 +22,7 @@ class DetectorGraph:
     Attributes
     ----------
     edge_index : ndarray, shape (2, E), int64
-        Directed COO edges (bidirectional: both u→v and v→u stored).
+        Directed COO edges (bidirectional: both u=>v and v=>u stored).
     edge_error_prob : ndarray, shape (E,), float32
         Per-edge error probability.
     edge_weight : ndarray, shape (E,), float32
@@ -196,7 +196,7 @@ def build_detector_graph(
     Notes
     -----
     The graph is stored in COO (coordinate) format with both directions
-    of each edge explicitly stored (u→v and v→u).
+    of each edge explicitly stored (u=>v and v=>u).
 
     Examples
     --------

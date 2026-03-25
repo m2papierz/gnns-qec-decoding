@@ -90,7 +90,7 @@ def main() -> None:
     # Generate raw data
     if args.mode in ("all", "raw-only"):
         log.info("=" * 60)
-        log.info("Generating raw data → %s", cfg.raw_data_dir)
+        log.info("Generating raw data => %s", cfg.raw_data_dir)
         log.info("=" * 60)
         try:
             generate_raw_data(cfg, overwrite=args.overwrite)
@@ -101,7 +101,7 @@ def main() -> None:
     # Build datasets
     if args.mode in ("all", "dataset-only"):
         log.info("=" * 60)
-        log.info("Building datasets → %s", cfg.datasets_dir)
+        log.info("Building datasets => %s", cfg.datasets_dir)
         log.info("Cases: %s", args.cases)
         log.info("=" * 60)
         try:

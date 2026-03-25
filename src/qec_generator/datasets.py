@@ -167,7 +167,7 @@ def _write_bp_soft_labels(
     overwrite : bool
         Overwrite existing labels.
     """
-    from qec_generator.bp import compute_bp_marginals
+    from qec_generator.bp import BPFactorGraph, compute_bp_marginals_batch
 
     out_path = shard_dir / f"{split}_bp_soft_labels.npy"
     if out_path.exists() and not overwrite:
@@ -208,7 +208,7 @@ def _write_bp_soft_labels(
         overwrite,
     )
 
-    # Compute BP marginals per syndrome shot
+    # Compute BP marginals in batches (topology built once, reused).
     syndrome = np.load(shard_dir / f"{split}_syndrome.npy", mmap_mode="r")
     n_samples = syndrome.shape[0]
     if syndrome.shape[1] != num_detectors:
@@ -217,6 +217,12 @@ def _write_bp_soft_labels(
             f"num_detectors {num_detectors} for split '{split}'"
         )
 
+    fg = BPFactorGraph.build(und_pairs, edge_probs, num_detectors)
+
+    # Cap BP batch size to bound memory (K * B * 8 bytes per message array;
+    # ~5 such arrays active per iteration).
+    _BP_BATCH = min(1024, chunk_size)
+
     soft_labels = np.empty((n_samples, num_und), dtype=np.float32)
     for off in tqdm(
         range(0, n_samples, chunk_size),
@@ -224,13 +230,15 @@ def _write_bp_soft_labels(
         leave=False,
     ):
         end = min(off + chunk_size, n_samples)
-        for i in range(off, end):
-            syn = np.asarray(syndrome[i], dtype=np.uint8)
-            soft_labels[i] = compute_bp_marginals(
+        for bp_off in range(off, end, _BP_BATCH):
+            bp_end = min(bp_off + _BP_BATCH, end)
+            syn_chunk = np.asarray(syndrome[bp_off:bp_end], dtype=np.uint8)
+            soft_labels[bp_off:bp_end] = compute_bp_marginals_batch(
                 und_pairs,
                 edge_probs,
                 num_detectors,
-                syn,
+                syn_chunk,
+                _factor_graph=fg,
             )
 
     save_npy(out_path, soft_labels, overwrite=True)

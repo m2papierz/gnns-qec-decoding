@@ -30,7 +30,7 @@ Physical qubits are fragile, environmental noise introduces random bit-flip, pha
 
 | Parameter | Meaning |
 |-----------|---------|
-| distance `d` | Grid size (d×d). More redundancy → better protection, but more qubits. |
+| distance `d` | Grid size (d×d). More redundancy => better protection, but more qubits. |
 | rounds `r` | How many times stabilisers are measured. Measurements themselves are noisy, so repetition helps. |
 | error prob `p` | Physical error rate per operation. |
 

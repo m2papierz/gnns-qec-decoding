@@ -3,7 +3,11 @@
 import numpy as np
 import pytest
 
-from qec_generator.bp import compute_bp_marginals
+from qec_generator.bp import (
+    BPFactorGraph,
+    compute_bp_marginals,
+    compute_bp_marginals_batch,
+)
 
 
 class TestComputeBpMarginals:
@@ -145,3 +149,123 @@ class TestComputeBpMarginals:
         # Edges 1,2 should have low marginal.
         assert marginals[1] < 0.1
         assert marginals[2] < 0.1
+
+
+class TestBPFactorGraph:
+    """Tests for BPFactorGraph precomputation and reuse."""
+
+    def test_factor_graph_reuse_matches_fresh(self) -> None:
+        """Passing _factor_graph gives identical results to fresh build."""
+        und_pairs = np.array([[0, 1], [1, 2], [0, 2]], dtype=np.int64)
+        edge_probs = np.array([0.1, 0.05, 0.15], dtype=np.float64)
+        syndrome = np.array([1, 0, 1], dtype=np.uint8)
+
+        fresh = compute_bp_marginals(und_pairs, edge_probs, 3, syndrome)
+
+        fg = BPFactorGraph.build(und_pairs, edge_probs, 3)
+        reused = compute_bp_marginals(
+            und_pairs, edge_probs, 3, syndrome, _factor_graph=fg
+        )
+
+        np.testing.assert_allclose(fresh, reused, atol=1e-7)
+
+    def test_factor_graph_connection_counts(self) -> None:
+        """Interior edge has 2 connections; boundary edge has 1."""
+        # Edge (0, 1): both detectors => 2 connections
+        # Edge (1, 5): node 5 is boundary (num_det=3) => 1 connection
+        und_pairs = np.array([[0, 1], [1, 5]], dtype=np.int64)
+        edge_probs = np.array([0.1, 0.1], dtype=np.float64)
+
+        fg = BPFactorGraph.build(und_pairs, edge_probs, 3)
+
+        assert fg.num_edges == 2
+        assert fg.num_connections == 3  # 2 + 1
+
+
+class TestComputeBpMarginalsBatch:
+    """Tests for compute_bp_marginals_batch."""
+
+    def test_batch_matches_single(self) -> None:
+        """Batch results match individual single-shot calls."""
+        rng = np.random.RandomState(99)
+        U = 6
+        und_pairs = np.column_stack([np.arange(U), np.arange(1, U + 1)]).astype(
+            np.int64
+        )
+        edge_probs = rng.uniform(0.01, 0.2, size=U).astype(np.float64)
+
+        B = 8
+        syndromes = rng.randint(0, 2, size=(B, U + 1)).astype(np.uint8)
+
+        # Single-shot reference
+        singles = np.stack(
+            [
+                compute_bp_marginals(und_pairs, edge_probs, U + 1, syndromes[b])
+                for b in range(B)
+            ]
+        )
+
+        batch = compute_bp_marginals_batch(und_pairs, edge_probs, U + 1, syndromes)
+
+        assert batch.shape == (B, U)
+        assert batch.dtype == np.float32
+        np.testing.assert_allclose(batch, singles, atol=1e-6)
+
+    def test_batch_with_factor_graph_reuse(self) -> None:
+        """Batch with precomputed factor graph matches without."""
+        und_pairs = np.array([[0, 1], [1, 2]], dtype=np.int64)
+        edge_probs = np.array([0.1, 0.1], dtype=np.float64)
+        syndromes = np.array([[1, 0, 1], [0, 0, 0], [1, 1, 0]], dtype=np.uint8)
+
+        fresh = compute_bp_marginals_batch(und_pairs, edge_probs, 3, syndromes)
+
+        fg = BPFactorGraph.build(und_pairs, edge_probs, 3)
+        reused = compute_bp_marginals_batch(
+            und_pairs, edge_probs, 3, syndromes, _factor_graph=fg
+        )
+
+        np.testing.assert_allclose(fresh, reused, atol=1e-7)
+
+    def test_batch_empty_graph(self) -> None:
+        """Batch with zero edges."""
+        und_pairs = np.zeros((0, 2), dtype=np.int64)
+        edge_probs = np.zeros(0, dtype=np.float64)
+        syndromes = np.zeros((5, 3), dtype=np.uint8)
+
+        result = compute_bp_marginals_batch(und_pairs, edge_probs, 3, syndromes)
+
+        assert result.shape == (5, 0)
+
+    def test_batch_single_sample(self) -> None:
+        """Batch with B=1 matches single-shot."""
+        und_pairs = np.array([[0, 1]], dtype=np.int64)
+        edge_probs = np.array([0.1], dtype=np.float64)
+        syndrome = np.array([1, 1], dtype=np.uint8)
+
+        single = compute_bp_marginals(und_pairs, edge_probs, 2, syndrome)
+        batch = compute_bp_marginals_batch(
+            und_pairs, edge_probs, 2, syndrome[np.newaxis]
+        )
+
+        assert batch.shape == (1, 1)
+        np.testing.assert_allclose(batch[0], single, atol=1e-7)
+
+    def test_batch_marginals_in_01(self) -> None:
+        """All batch marginals lie in [0, 1]."""
+        rng = np.random.RandomState(7)
+        U = 8
+        und_pairs = np.column_stack([np.arange(U), np.arange(1, U + 1)]).astype(
+            np.int64
+        )
+        edge_probs = rng.uniform(0.01, 0.3, size=U).astype(np.float64)
+        syndromes = rng.randint(0, 2, size=(32, U + 1)).astype(np.uint8)
+
+        batch = compute_bp_marginals_batch(
+            und_pairs,
+            edge_probs,
+            U + 1,
+            syndromes,
+        )
+
+        assert np.all(batch >= 0.0)
+        assert np.all(batch <= 1.0)
