@@ -1,0 +1,87 @@
+"""Benchmark GNN decoder inference across backends and batch sizes.
+
+Autodiscovers trained checkpoints and measures latency, throughput,
+and peak GPU memory for each (case, backend, batch_size) combination.
+
+Examples
+--------
+    # Default: pytorch + compiled backends, batch sizes 1/16/64/128
+    uv run scripts/benchmark_all.py
+
+    # Custom backends and batch sizes
+    uv run scripts/benchmark_all.py --backends pytorch compiled tensorrt \
+        --batch-sizes 16 64 128
+
+    # More iterations for stable measurements
+    uv run scripts/benchmark_all.py --n-iters 500
+"""
+
+import argparse
+import logging
+from pathlib import Path
+from typing import Sequence
+
+from benchmarks.runner import run_all
+from cli import setup_logging
+
+
+logger = logging.getLogger(__name__)
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--runs-dir",
+        type=Path,
+        default=Path("outputs/runs"),
+        help="Directory containing {case}/best.pt checkpoints.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=Path("outputs/benchmark_report.json"),
+        help="Output path for benchmark JSON report.",
+    )
+    parser.add_argument(
+        "--backends",
+        nargs="+",
+        default=["pytorch", "compiled"],
+        choices=["pytorch", "compiled", "tensorrt"],
+    )
+    parser.add_argument(
+        "--batch-sizes",
+        nargs="+",
+        type=int,
+        default=[1, 16, 64, 128],
+    )
+    parser.add_argument("--n-iters", type=int, default=100)
+    parser.add_argument("--warmup-iters", type=int, default=10)
+    parser.add_argument("-v", "--verbose", action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = parse_args(argv)
+    setup_logging(verbose=args.verbose)
+
+    report = run_all(
+        runs_dir=args.runs_dir,
+        output_path=args.output,
+        backends=args.backends,
+        batch_sizes=args.batch_sizes,
+        n_iters=args.n_iters,
+        warmup_iters=args.warmup_iters,
+    )
+    logger.info(
+        "Benchmark complete: %d measurements across %d checkpoints",
+        len(report.results),
+        len({r["checkpoint"] for r in report.results}),
+    )
+
+
+if __name__ == "__main__":
+    main()
