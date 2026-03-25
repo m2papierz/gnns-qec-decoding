@@ -170,3 +170,20 @@ The TensorRT backend uses `torch.compile` with the `torch_tensorrt` backend, whi
 See [`src/deploy/README.md`](src/deploy/README.md) for Python API, benchmark output format, and details on TRT graph partitioning.
 
 See [`src/kernels/README.md`](src/kernels/README.md) for custom CUDA kernels used with the `cuda` compute backend.
+
+## Benchmarks and plots
+
+After training and evaluation, benchmark inference and generate figures:
+
+```bash
+# Inference benchmarks (latency, throughput, memory)
+uv run scripts/benchmark_all.py -v
+
+# Generate all plots (requires: pip install matplotlib)
+uv run scripts/plot_results.py -v
+
+# Eval-only plots (no benchmark data needed)
+uv run scripts/plot_results.py --no-benchmark -v
+```
+
+See [`src/benchmarks/README.md`](src/benchmarks/README.md) for report format, plot descriptions, and the full pipeline from training to figures.
