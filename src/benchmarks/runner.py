@@ -3,8 +3,15 @@
 Autodiscovers trained checkpoints, benchmarks each across backends and
 batch sizes, and writes a consolidated JSON report with hardware metadata.
 
-The heavy lifting is delegated to :class:`deploy.engine.InferenceEngine`;
-this module handles discovery, iteration, memory tracking, and reporting.
+The project has three compute backends:
+
+- ``pytorch`` — pure PyTorch eager ops
+- ``compiled`` — PyTorch ops + ``torch.compile`` model wrapper
+- ``cuda`` — hand-written CUDA kernels (requires ``build_kernels.py``)
+
+The ``cuda`` backend operates at the ops level (``gnn.models.ops``),
+not at the ``torch.compile`` level.  This module sets the correct ops
+backend before loading the model for each benchmark.
 """
 
 from __future__ import annotations
@@ -28,11 +35,18 @@ from deploy.engine import (
 
 logger = logging.getLogger(__name__)
 
-# Approximate detector-graph geometry for a d=5 rotated surface code
-# memory experiment (~66 nodes, ~192 directed edges).  Used to build
-# synthetic batches for benchmarking.
+# Approximate d=5 rotated surface code geometry.
 _DEFAULT_NODES: int = 66
 _DEFAULT_EDGES: int = 192
+
+# Maps project backend name => (ops_backend, engine_backend).
+# ops_backend is passed to gnn.models.ops.set_backend().
+# engine_backend is passed to deploy.engine.InferenceEngine.
+_BACKEND_MAP: dict[str, tuple[str, str]] = {
+    "pytorch": ("pytorch", "pytorch"),
+    "compiled": ("compiled", "compiled"),
+    "cuda": ("cuda", "pytorch"),
+}
 
 
 @dataclass
@@ -72,14 +86,33 @@ def _collect_hardware_info() -> Dict[str, Any]:
     return info
 
 
-def discover_checkpoints(runs_dir: Path) -> Dict[str, Path]:
-    """Find best.pt checkpoints under runs_dir/{case}/.
+def detect_available_backends() -> List[str]:
+    """Return list of backends that are actually usable.
 
-    Returns
-    -------
-    dict
-        Mapping from case name to checkpoint path.
+    Always includes ``pytorch``.  Adds ``compiled`` if CUDA is available.
+    Adds ``cuda`` if the CUDA kernels extension is built.
     """
+    available = ["pytorch"]
+
+    if torch.cuda.is_available():
+        available.append("compiled")
+
+    try:
+        import kernels
+
+        if kernels.AVAILABLE:
+            available.append("cuda")
+            logger.info("CUDA kernels detected — 'cuda' backend available")
+        else:
+            logger.info("CUDA kernels not built — 'cuda' backend skipped")
+    except ImportError:
+        logger.info("kernels package not found — 'cuda' backend skipped")
+
+    return available
+
+
+def discover_checkpoints(runs_dir: Path) -> Dict[str, Path]:
+    """Find best.pt checkpoints under runs_dir/{case}/."""
     found: Dict[str, Path] = {}
     for case in CASES:
         ckpt = runs_dir / case / "best.pt"
@@ -101,7 +134,7 @@ def _peak_memory_mb() -> float:
 def benchmark_checkpoint(
     checkpoint: Path,
     *,
-    backends: Sequence[str] = ("pytorch", "compiled"),
+    backends: Sequence[str] = ("pytorch", "compiled", "cuda"),
     batch_sizes: Sequence[int] = (1, 16, 64, 128),
     n_iters: int = 100,
     warmup_iters: int = 10,
@@ -109,31 +142,25 @@ def benchmark_checkpoint(
 ) -> List[Dict[str, Any]]:
     """Benchmark a single checkpoint across backends and batch sizes.
 
-    Parameters
-    ----------
-    checkpoint : Path
-        Path to ``best.pt``.
-    backends : sequence of str
-        Backends to benchmark (``"pytorch"``, ``"compiled"``, ``"tensorrt"``).
-    batch_sizes : sequence of int
-        Number of graphs per batch.
-    n_iters : int
-        Timed iterations per measurement.
-    warmup_iters : int
-        Warmup passes before timing.
-    device : str
-        Target device.
-
-    Returns
-    -------
-    list of dict
-        One result dict per (backend, batch_size) combination.
+    For each backend, reloads the model fresh with the correct ops
+    backend to avoid stale compiled caches.
     """
-    model, cfg = load_model_from_checkpoint(checkpoint, device=device)
-    case = cfg["case"]
+    from gnn.models.ops import set_backend
+
     results: List[Dict[str, Any]] = []
 
     for backend in backends:
+        if backend not in _BACKEND_MAP:
+            logger.warning("Unknown backend %r, skipping", backend)
+            continue
+
+        ops_backend, engine_backend = _BACKEND_MAP[backend]
+
+        # Reload model with the right ops backend active.
+        set_backend(ops_backend)
+        model, cfg = load_model_from_checkpoint(checkpoint, device=device)
+        case = cfg["case"]
+
         for bs in batch_sizes:
             label = f"{case}/{backend}/bs={bs}"
             logger.info("Benchmarking %s ...", label)
@@ -151,7 +178,7 @@ def benchmark_checkpoint(
 
                 engine = InferenceEngine(
                     model,
-                    backend=backend,
+                    backend=engine_backend,
                     device=device,
                     warmup_iters=warmup_iters,
                 )
@@ -194,7 +221,7 @@ def run_all(
     runs_dir: Path,
     output_path: Path,
     *,
-    backends: Sequence[str] = ("pytorch", "compiled"),
+    backends: Sequence[str] | None = None,
     batch_sizes: Sequence[int] = (1, 16, 64, 128),
     n_iters: int = 100,
     warmup_iters: int = 10,
@@ -203,16 +230,8 @@ def run_all(
 
     Parameters
     ----------
-    runs_dir : Path
-        Directory containing ``{case}/best.pt`` checkpoints.
-    output_path : Path
-        Where to write ``benchmark_report.json``.
-    backends, batch_sizes, n_iters, warmup_iters
-        Forwarded to :func:`benchmark_checkpoint`.
-
-    Returns
-    -------
-    BenchmarkReport
+    backends : sequence of str or None
+        Backends to test.  None = auto-detect all available.
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     checkpoints = discover_checkpoints(runs_dir)
@@ -220,6 +239,10 @@ def run_all(
     if not checkpoints:
         logger.error("No checkpoints found in %s", runs_dir)
         return BenchmarkReport()
+
+    if backends is None:
+        backends = detect_available_backends()
+        logger.info("Auto-detected backends: %s", backends)
 
     report = BenchmarkReport(hardware=_collect_hardware_info())
 

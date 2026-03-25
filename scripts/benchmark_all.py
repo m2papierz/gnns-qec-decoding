@@ -1,19 +1,19 @@
 """Benchmark GNN decoder inference across backends and batch sizes.
 
-Autodiscovers trained checkpoints and measures latency, throughput,
-and peak GPU memory for each (case, backend, batch_size) combination.
+Autodiscovers trained checkpoints and available backends (including
+CUDA kernels if built), measures latency, throughput, and peak GPU
+memory for each combination.
 
 Examples
 --------
-    # Default: pytorch + compiled backends, batch sizes 1/16/64/128
+    # Auto-detect all available backends
     uv run scripts/benchmark_all.py
 
-    # Custom backends and batch sizes
-    uv run scripts/benchmark_all.py --backends pytorch compiled tensorrt \
-        --batch-sizes 16 64 128
+    # Explicit backends
+    uv run scripts/benchmark_all.py --backends pytorch compiled cuda
 
-    # More iterations for stable measurements
-    uv run scripts/benchmark_all.py --n-iters 500
+    # Custom batch sizes and more iterations
+    uv run scripts/benchmark_all.py --batch-sizes 16 64 128 256 --n-iters 500
 """
 
 import argparse
@@ -37,20 +37,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--runs-dir",
         type=Path,
         default=Path("outputs/runs"),
-        help="Directory containing {case}/best.pt checkpoints.",
     )
     parser.add_argument(
         "-o",
         "--output",
         type=Path,
         default=Path("outputs/benchmark_report.json"),
-        help="Output path for benchmark JSON report.",
     )
     parser.add_argument(
         "--backends",
         nargs="+",
-        default=["pytorch", "compiled"],
-        choices=["pytorch", "compiled", "tensorrt"],
+        default=None,
+        choices=["pytorch", "compiled", "cuda", "tensorrt"],
+        help="Backends to benchmark (default: auto-detect all available).",
     )
     parser.add_argument(
         "--batch-sizes",

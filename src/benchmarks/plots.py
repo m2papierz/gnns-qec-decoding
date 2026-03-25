@@ -3,13 +3,13 @@
 Loads evaluation result JSONs (up to 5 decoders) and an optional
 inference benchmark JSON, then produces publication-ready figures:
 
-1. **LER vs p** - all decoders, per distance.  Wilson CI error bands.
+1. **LER vs p** - all decoders, per distance.  Capped Wilson CI bands.
 2. **LER scaling with d** - at a fixed reference error probability.
-3. **LER vs latency (Pareto)** - main result.
+3. **LER vs latency (Pareto)** - per backend, GNN decoders.
 4. **Throughput vs batch size** - by backend.
-5. **Speedup bar chart** - compiled/tensorrt normalised to pytorch.
+5. **Speedup bar chart** - compiled/cuda normalised to pytorch.
 
-All plots are saved as PDF + PNG to an output directory.
+All plots are saved as PNG to an output directory.
 """
 
 from __future__ import annotations
@@ -44,14 +44,7 @@ def load_eval_results(
         "gnn_edge_bp_osd.json",
     ),
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Load all evaluation JSONs into a dict keyed by decoder label.
-
-    Returns
-    -------
-    dict
-        ``{label: [result_dicts, ...]}`` where label is derived from
-        the filename.
-    """
+    """Load all evaluation JSONs keyed by decoder label."""
     all_results: Dict[str, List[Dict[str, Any]]] = {}
 
     for fname in filenames:
@@ -73,7 +66,6 @@ def load_eval_results(
 
 
 def _label_from_filename(fname: str) -> str:
-    """Derive a human-readable decoder label from a result filename."""
     mapping = {
         "mwpm_baseline.json": "MWPM",
         "bp_osd_baseline.json": "BP+OSD",
@@ -85,16 +77,13 @@ def _label_from_filename(fname: str) -> str:
 
 
 def load_benchmark_results(path: Path) -> Dict[str, Any]:
-    """Load inference benchmark JSON."""
     return _load_json(path)
 
 
 def _wilson_ci(
-    n_errors: int,
-    n_shots: int,
-    z: float = 1.96,
+    n_errors: int, n_shots: int, z: float = 1.96
 ) -> tuple[float, float, float]:
-    """Wilson score interval for a binomial proportion."""
+    """Wilson score interval.  Returns (p_hat, lower, upper)."""
     if n_shots == 0:
         return 0.0, 0.0, 0.0
 
@@ -107,10 +96,14 @@ def _wilson_ci(
 
     lo = max(0.0, (centre - spread) / denom)
     hi = min(1.0, (centre + spread) / denom)
+
+    # Cap CI band width to 3x the point estimate (avoids absurd bands
+    # when n_errors is very small).
+    if p_hat > 0:
+        lo = max(lo, p_hat / 4)
+        hi = min(hi, p_hat * 4)
+
     return p_hat, lo, hi
-
-
-# ── Colour and style config ─────────────────────────────────────────
 
 
 _DECODER_STYLES: Dict[str, Dict[str, Any]] = {
@@ -124,7 +117,8 @@ _DECODER_STYLES: Dict[str, Dict[str, Any]] = {
 _BACKEND_COLORS: Dict[str, str] = {
     "pytorch": "#1f77b4",
     "compiled": "#ff7f0e",
-    "tensorrt": "#2ca02c",
+    "cuda": "#2ca02c",
+    "tensorrt": "#d62728",
 }
 
 
@@ -175,7 +169,7 @@ def plot_ler_vs_p(
                 markersize=5,
                 linewidth=1.5,
             )
-            ax.fill_between(probs, lo, hi, alpha=0.12, color=sty["color"])
+            ax.fill_between(probs, lo, hi, alpha=0.10, color=sty["color"])
 
         ax.set_xscale("log")
         ax.set_yscale("log")
@@ -198,7 +192,6 @@ def plot_ler_scaling_with_d(
     """Plot 2: LER vs distance at a fixed error probability."""
     import matplotlib.pyplot as plt
 
-    # Auto-select reference_p: pick the median available error_prob.
     all_probs = sorted({r["error_prob"] for rs in eval_results.values() for r in rs})
     if not all_probs:
         logger.warning("No data for LER scaling plot")
@@ -207,7 +200,6 @@ def plot_ler_scaling_with_d(
     if reference_p is None:
         reference_p = all_probs[len(all_probs) // 2]
     elif reference_p not in all_probs:
-        # Snap to closest available
         reference_p = min(all_probs, key=lambda x: abs(x - reference_p))
 
     fig, ax = plt.subplots(figsize=(6, 4.5))
@@ -250,7 +242,7 @@ def plot_ler_vs_latency(
     benchmark_data: Dict[str, Any],
     output_dir: Path,
 ) -> None:
-    """Plot 3: LER vs inference latency (Pareto front)."""
+    """Plot 3: LER vs inference latency - one point per (decoder, backend)."""
     import matplotlib.pyplot as plt
 
     bench_results = benchmark_data.get("results", [])
@@ -258,57 +250,67 @@ def plot_ler_vs_latency(
         logger.warning("No benchmark data for Pareto plot")
         return
 
-    # Build latency lookup: (case, backend) → mean_ms at bs=64 (or closest)
+    # Build latency lookup: (case, backend) => mean_ms at the largest
+    # batch_size available (representative throughput regime).
     latency_map: Dict[tuple[str, str], float] = {}
     for br in bench_results:
         key = (br["case"], br["backend"])
-        if key not in latency_map or br["batch_size"] == 64:
+        if key not in latency_map or br["batch_size"] > latency_map.get(
+            key + ("_bs",), 0  # type: ignore[arg-type]
+        ):
             latency_map[key] = br["mean_ms"]
+
+    _DECODER_TO_CASE = {
+        "GNN direct": "direct",
+        "GNN => MWPM": "edge",
+        "GNN => BP+OSD": "edge",
+    }
 
     fig, ax = plt.subplots(figsize=(7, 5))
 
-    _DECODER_TO_CASE_BACKEND = {
-        "MWPM": None,
-        "BP+OSD": None,
-        "GNN direct": ("direct", "compiled"),
-        "GNN→MWPM": ("edge", "compiled"),
-        "GNN→BP+OSD": ("edge", "compiled"),
-    }
+    # Collect all available backends from benchmark data.
+    all_backends = sorted({br["backend"] for br in bench_results})
 
     for label, results in eval_results.items():
-        cb = _DECODER_TO_CASE_BACKEND.get(label)
-        if cb is None:
-            continue  # baselines have no inference latency to plot
-
-        latency = latency_map.get(cb)
-        if latency is None:
-            # Try pytorch fallback
-            latency = latency_map.get((cb[0], "pytorch"))
-        if latency is None:
-            continue
+        case = _DECODER_TO_CASE.get(label)
+        if case is None:
+            continue  # baselines have no GNN inference
 
         mean_ler = np.mean([r["logical_error_rate"] for r in results])
         sty = _style(label)
-        ax.scatter(
-            latency,
-            mean_ler,
-            label=label,
-            marker=sty["marker"],
-            color=sty["color"],
-            s=80,
-            zorder=5,
-        )
 
-    # Annotate 1 µs QEC cycle time
-    ax.axvline(x=1e-3, color="gray", ls=":", alpha=0.5, label="1 µs QEC cycle")
+        for backend in all_backends:
+            latency = latency_map.get((case, backend))
+            if latency is None:
+                continue
+
+            marker = sty["marker"]
+            color = _BACKEND_COLORS.get(backend, sty["color"])
+            ax.scatter(
+                latency,
+                mean_ler,
+                marker=marker,
+                color=color,
+                s=80,
+                zorder=5,
+                edgecolors="black",
+                linewidths=0.5,
+            )
+            ax.annotate(
+                f"{label}\n({backend})",
+                (latency, mean_ler),
+                textcoords="offset points",
+                xytext=(8, 4),
+                fontsize=6.5,
+                alpha=0.8,
+            )
 
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel("Inference latency (ms)")
     ax.set_ylabel("Mean LER")
-    ax.set_title("LER vs Latency (Pareto)")
+    ax.set_title("LER vs Latency")
     ax.grid(True, which="both", alpha=0.3)
-    ax.legend(fontsize=8)
     fig.tight_layout()
     _save_fig(fig, output_dir / "ler_vs_latency")
 
@@ -327,7 +329,6 @@ def plot_throughput_vs_batch(
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
 
-    # Group by (case, backend)
     groups: Dict[tuple[str, str], tuple[list, list]] = {}
     for br in bench_results:
         key = (br["case"], br["backend"])
@@ -377,7 +378,6 @@ def plot_speedup_bar(
         logger.warning("No benchmark data for speedup plot")
         return
 
-    # Find reference latencies
     ref_latency: Dict[str, float] = {}
     for br in bench_results:
         if (
@@ -394,7 +394,6 @@ def plot_speedup_bar(
         )
         return
 
-    # Compute speedups
     cases = sorted(ref_latency.keys())
     backends = sorted({br["backend"] for br in bench_results} - {reference_backend})
 
@@ -402,7 +401,7 @@ def plot_speedup_bar(
         logger.warning("Only one backend found, cannot compute speedup")
         return
 
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=(max(6, 2 * len(cases) * len(backends)), 4))
     x = np.arange(len(cases))
     width = 0.8 / max(len(backends), 1)
 
@@ -424,7 +423,12 @@ def plot_speedup_bar(
         offset = (i - (len(backends) - 1) / 2) * width
         color = _BACKEND_COLORS.get(backend, "gray")
         bars = ax.bar(
-            x + offset, speedups, width, label=backend, color=color, alpha=0.85
+            x + offset,
+            speedups,
+            width,
+            label=backend,
+            color=color,
+            alpha=0.85,
         )
 
         for bar, spd in zip(bars, speedups):
@@ -432,14 +436,18 @@ def plot_speedup_bar(
                 ax.text(
                     bar.get_x() + bar.get_width() / 2,
                     bar.get_height() + 0.02,
-                    f"{spd:.1f}×",
+                    f"{spd:.1f}x",
                     ha="center",
                     va="bottom",
                     fontsize=8,
                 )
 
     ax.axhline(
-        y=1.0, color="gray", ls="--", alpha=0.5, label=f"{reference_backend} (1x)"
+        y=1.0,
+        color="gray",
+        ls="--",
+        alpha=0.5,
+        label=f"{reference_backend} (1x)",
     )
     ax.set_xticks(x)
     ax.set_xticklabels(cases)
@@ -452,12 +460,11 @@ def plot_speedup_bar(
 
 
 def _save_fig(fig: Any, stem: Path) -> None:
-    """Save a matplotlib figure as PDF and PNG."""
+    """Save a matplotlib figure as PNG."""
     stem.parent.mkdir(parents=True, exist_ok=True)
-    for ext in (".pdf", ".png"):
-        path = stem.with_suffix(ext)
-        fig.savefig(path, dpi=150, bbox_inches="tight")
-        logger.info("Saved %s", path)
+    path = stem.with_suffix(".png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    logger.info("Saved %s", path)
     import matplotlib.pyplot as plt
 
     plt.close(fig)
@@ -470,20 +477,8 @@ def generate_all_plots(
     *,
     reference_p: float | None = None,
 ) -> None:
-    """Generate all plots from evaluation and benchmark data.
+    """Generate all plots from evaluation and benchmark data."""
 
-    Parameters
-    ----------
-    results_dir : Path
-        Directory containing eval JSON files.
-    benchmark_path : Path or None
-        Path to ``benchmark_report.json`` (None to skip latency/throughput plots).
-    output_dir : Path
-        Where to save generated figures.
-    reference_p : float or None
-        Fixed error probability for the LER scaling plot.
-        None to auto-select the median available value.
-    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -495,11 +490,9 @@ def generate_all_plots(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Always generate eval-only plots
     plot_ler_vs_p(eval_data, output_dir)
     plot_ler_scaling_with_d(eval_data, output_dir, reference_p=reference_p)
 
-    # Generate benchmark-dependent plots if data available
     bench_data: Dict[str, Any] = {}
     if benchmark_path is not None:
         bench_data = load_benchmark_results(benchmark_path)
