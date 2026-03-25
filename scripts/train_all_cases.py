@@ -34,6 +34,14 @@ logger = logging.getLogger(__name__)
 
 _TRAIN_SCRIPT = Path(__file__).parent / "train_gnn.py"
 
+# Per-case CLI overrides applied on top of the shared train config.
+# Edge case uses a lower LR because MSE loss has a smoother landscape
+# than BCE — higher LR causes oscillations around the minimum.
+_CASE_OVERRIDES: dict[str, list[str]] = {
+    "direct": [],
+    "edge": ["--lr", "1.0e-4"],
+}
+
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -101,6 +109,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "--case",
             case,
         ]
+        cmd += _CASE_OVERRIDES.get(case, [])
         if args.backend is not None:
             cmd += ["--backend", args.backend]
         if args.verbose:
