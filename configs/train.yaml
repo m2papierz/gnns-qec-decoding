@@ -14,16 +14,16 @@ output_dir: "./outputs/runs"
 
 # Model architecture
 model:
-  hidden_dim: 64
+  hidden_dim: 128
   num_layers: 6
   dropout: 0.1
 
 # Optimisation
 optimisation:
-  lr: 1.0e-3
-  weight_decay: 1.0e-4
-  epochs: 500
-  batch_size: 128
+  lr: 2.5e-4
+  weight_decay: 1.0e-5
+  epochs: 750
+  batch_size: 256
 
 # Data loading
 num_workers: 4
@@ -37,7 +37,7 @@ max_grad_norm: 1.0
 # Early stopping: patience counts validation runs, not epochs.
 # With val_every: 5 and patience: 25, the model must improve within 125 epochs.
 # Set patience to 0 to disable early stopping.
-patience: 50
+patience: 75
 val_every: 5
 
 # Reproducibility

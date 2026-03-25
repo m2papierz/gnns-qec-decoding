@@ -61,9 +61,6 @@ class TrainConfig:
         Graphs per training batch.
     num_workers : int
         DataLoader worker processes.
-    edge_pos_weight : float or None
-        Positive-class weight for edge BCE loss.  If None, estimated
-        from training data.  Only used for ``edge``.
     max_grad_norm : float
         Maximum gradient norm for clipping.
     patience : int
