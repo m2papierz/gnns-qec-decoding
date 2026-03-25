@@ -66,7 +66,7 @@ def _collect_hardware_info() -> Dict[str, Any]:
     if torch.cuda.is_available():
         info["gpu"] = torch.cuda.get_device_name(0)
         info["gpu_memory_gb"] = round(
-            torch.cuda.get_device_properties(0).total_mem / 1e9, 2
+            torch.cuda.get_device_properties(0).total_memory / 1e9, 2
         )
         info["cuda_version"] = torch.version.cuda or "unknown"
     return info
