@@ -19,7 +19,6 @@ dependencies = [
     "tensorrt-cu12-bindings>=10.0",
     "tensorrt-cu12-libs>=10.0",
     "tqdm>=4.67.1",
-    "scikit-learn>=1.8.0",
     "cudaq-qec-cu12>=0.5.0.post1",
 ]
 

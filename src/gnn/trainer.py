@@ -61,6 +61,9 @@ class TrainConfig:
         Graphs per training batch.
     num_workers : int
         DataLoader worker processes.
+    edge_pos_weight : float or None
+        Positive-class weight for edge BCE loss.  If None, estimated
+        from training data.  Only used for ``edge``.
     max_grad_norm : float
         Maximum gradient norm for clipping.
     patience : int
@@ -407,6 +410,7 @@ class Trainer:
         num_batches = 0
         total_graphs = 0
         total_errors = 0
+        total_mae = 0.0
 
         for batch in self.train_loader:
             batch = batch.to(self.device)
@@ -431,12 +435,16 @@ class Trainer:
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
-            if self.cfg.case == "direct":
-                with torch.no_grad():
+            with torch.no_grad():
+                if self.cfg.case == "direct":
                     pred = (logits > 0.0).float()
                     target_2d = batch.y.view_as(pred)
                     total_graphs += pred.shape[0]
                     total_errors += int((pred != target_2d).any(dim=1).sum().item())
+                else:
+                    total_mae += float(
+                        (torch.sigmoid(logits) - batch.y).abs().mean().item()
+                    )
 
             total_loss += loss.item()
             num_batches += 1
@@ -446,6 +454,8 @@ class Trainer:
         }
         if self.cfg.case == "direct" and total_graphs > 0:
             metrics["ler"] = total_errors / total_graphs
+        if self.cfg.case == "edge" and num_batches > 0:
+            metrics["mae"] = total_mae / num_batches
 
         return metrics
 
@@ -466,6 +476,7 @@ class Trainer:
         num_batches = 0
         total_graphs = 0
         total_errors = 0
+        total_mae = 0.0
 
         for batch in self.val_loader:
             batch = batch.to(self.device)
@@ -485,6 +496,10 @@ class Trainer:
                 target_2d = batch.y.view_as(pred)
                 total_graphs += pred.shape[0]
                 total_errors += int((pred != target_2d).any(dim=1).sum().item())
+            else:
+                total_mae += float(
+                    (torch.sigmoid(logits) - batch.y).abs().mean().item()
+                )
 
             total_loss += loss.item()
             num_batches += 1
@@ -494,6 +509,8 @@ class Trainer:
         }
         if self.cfg.case == "direct" and total_graphs > 0:
             metrics["ler"] = total_errors / total_graphs
+        if self.cfg.case == "edge" and num_batches > 0:
+            metrics["mae"] = total_mae / num_batches
 
         return metrics
 
@@ -639,42 +656,6 @@ class Trainer:
         return self._best_path
 
 
-def _roc_auc_score(targets: np.ndarray, scores: np.ndarray) -> float:
-    """
-    Compute ROC AUC from binary targets and continuous scores.
-
-    Uses the Mann-Whitney U statistic which handles tied scores
-    correctly. Returns 0.5 if only one class is present.
-    """
-    pos_mask = targets == 1
-    num_pos = int(pos_mask.sum())
-    num_neg = len(targets) - num_pos
-
-    if num_pos == 0 or num_neg == 0:
-        return 0.5
-
-    # Average ranks (1-based), ties get mean rank
-    order = np.argsort(scores)
-    ranks = np.empty_like(order, dtype=np.float64)
-    ranks[order] = np.arange(1, len(scores) + 1, dtype=np.float64)
-
-    # Adjust for ties: groups of equal scores share the mean rank
-    sorted_scores = scores[order]
-    i = 0
-    while i < len(sorted_scores):
-        j = i + 1
-        while j < len(sorted_scores) and sorted_scores[j] == sorted_scores[i]:
-            j += 1
-        if j > i + 1:
-            mean_rank = (i + 1 + j) / 2.0
-            ranks[order[i:j]] = mean_rank
-        i = j
-
-    rank_sum = ranks[pos_mask].sum()
-    u = rank_sum - num_pos * (num_pos + 1) / 2.0
-    return float(u / (num_pos * num_neg))
-
-
 def _validate_dataset(ds: MixedSurfaceCodeDataset, label: str) -> None:
     """Smoke-test dataset by loading first sample; raises on bad shapes."""
     sample = ds[0]
@@ -701,6 +682,10 @@ def _format_metrics(metrics: Dict[str, float]) -> str:
     for k, v in metrics.items():
         if k == "ler":
             parts.append(f"LER={v:.4f}")
+        elif k == "mae":
+            parts.append(f"MAE={v:.2e}")
+        elif k == "loss" and abs(v) < 1e-3:
+            parts.append(f"loss={v:.2e}")
         else:
             parts.append(f"{k}={v:.4f}")
     return "  ".join(parts)
