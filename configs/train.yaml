@@ -5,7 +5,7 @@
 case: "direct"
 
 # Compute backend: "pytorch", "compiled", or "cuda"
-backend: "compiled"
+backend: "pytorch"
 compile_mode: "reduce-overhead"
 
 # Data paths
