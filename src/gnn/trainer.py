@@ -21,6 +21,7 @@ import torch.nn as nn
 import yaml
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.utils.data import Subset, WeightedRandomSampler
 from torch_geometric.data import Batch
 from torch_geometric.loader import DataLoader
 
@@ -30,11 +31,6 @@ from gnn.models.heads import QECDecoder, build_model
 
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Stratified subset selection
-# ---------------------------------------------------------------------------
 
 
 def build_stratified_subset(
@@ -111,6 +107,104 @@ def build_stratified_subset(
     return chosen
 
 
+def build_direct_sampler(
+    ds: MixedSurfaceCodeDataset,
+    indices: Sequence[int] | None,
+    pos_oversample_cap: float = 10.0,
+) -> WeightedRandomSampler:
+    """Build a ``WeightedRandomSampler`` for the ``direct`` training case.
+
+    Combines two sources of per-sample reweighting:
+
+    1. **Distance weight** — larger ``d`` gets higher weight so that
+       harder settings are not drowned out by easy small-distance ones.
+       Formula: ``w_d = distance / d_min``.
+    2. **Class weight** — positive samples (any observable flipped) are
+       up-weighted to counter the rarity of logical errors at low ``p``.
+       Formula: ``w_cls = min(n_neg / n_pos, pos_oversample_cap)`` for
+       positive samples, ``1.0`` for negatives.
+
+    Final per-sample weight: ``w_d * w_cls``.
+
+    Parameters
+    ----------
+    ds : MixedSurfaceCodeDataset
+        The underlying (non-subsetted) dataset.
+    indices : sequence of int or None
+        If the training set is a ``Subset``, pass the subset indices.
+        ``None`` means use all samples.
+    pos_oversample_cap : float
+        Maximum positive-class weight to avoid extreme oversampling.
+
+    Returns
+    -------
+    WeightedRandomSampler
+        Sampler with ``replacement=True`` and ``num_samples=len(indices)``.
+    """
+    if indices is None:
+        idx_arr = np.arange(len(ds), dtype=np.int64)
+    else:
+        idx_arr = np.asarray(indices, dtype=np.int64)
+
+    n_samples = len(idx_arr)
+    setting_ids = ds._setting_id[idx_arr]
+    shot_ids = ds._shot_id[idx_arr]
+
+    # --- Precompute per-sample: distance and is_positive ---
+    distances = np.empty(n_samples, dtype=np.float64)
+    is_positive = np.empty(n_samples, dtype=bool)
+
+    # Group by setting for efficient bulk logical label lookup.
+    unique_sids = np.unique(setting_ids)
+    for sid in unique_sids:
+        mask = setting_ids == sid
+        info = ds.settings[int(sid)]
+        distances[mask] = info.distance
+
+        # Load logical labels (memory-mapped).
+        _, logical_mm = ds._get_split_arrays(int(sid))
+        shots = shot_ids[mask]
+        logical_rows = np.asarray(logical_mm[shots], dtype=np.float32)
+        if logical_rows.ndim == 1:
+            is_positive[mask] = logical_rows > 0.5
+        else:
+            is_positive[mask] = logical_rows.any(axis=1)
+
+    # --- Distance weight ---
+    d_min = distances.min()
+    w_distance = distances / max(d_min, 1.0)
+
+    # --- Class weight ---
+    n_pos = int(is_positive.sum())
+    n_neg = n_samples - n_pos
+    if n_pos > 0:
+        raw_pos_weight = n_neg / n_pos
+        pos_weight = min(raw_pos_weight, pos_oversample_cap)
+    else:
+        pos_weight = 1.0
+
+    w_class = np.where(is_positive, pos_weight, 1.0)
+
+    weights = w_distance * w_class
+
+    logger.info(
+        "Direct sampler: %d samples, %d pos (%.2f%%), "
+        "pos_weight=%.2f, d_weights=[%.2f..%.2f]",
+        n_samples,
+        n_pos,
+        100.0 * n_pos / max(n_samples, 1),
+        pos_weight,
+        w_distance.min(),
+        w_distance.max(),
+    )
+
+    return WeightedRandomSampler(
+        weights=torch.as_tensor(weights, dtype=torch.double),
+        num_samples=n_samples,
+        replacement=True,
+    )
+
+
 @dataclass
 class TrainConfig:
     """
@@ -182,6 +276,9 @@ class TrainConfig:
     max_samples: int | None = None
     backend: str = "pytorch"
     compile_mode: str = "reduce-overhead"
+    focal_alpha: float = 0.25
+    focal_gamma: float = 2.0
+    direct_pos_oversample_cap: float = 10.0
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "TrainConfig":
@@ -203,6 +300,9 @@ class TrainConfig:
             "max_samples",
             "backend",
             "compile_mode",
+            "focal_alpha",
+            "focal_gamma",
+            "direct_pos_oversample_cap",
         ):
             if key in raw:
                 flat[key] = raw[key]
@@ -233,6 +333,39 @@ def seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+class FocalBCEWithLogitsLoss(nn.Module):
+    """Sigmoid focal loss for imbalanced binary classification.
+
+    Down-weights well-classified examples, focusing training on hard
+    positives/negatives.  Standard choice for rare-positive detection
+    tasks (logical flip rate is low at small ``p`` and large ``d``).
+
+    Parameters
+    ----------
+    alpha : float
+        Balancing factor for the positive class (default: 0.25).
+    gamma : float
+        Focusing exponent — higher values suppress easy examples more
+        aggressively (default: 2.0).
+    """
+
+    def __init__(self, alpha: float = 0.25, gamma: float = 2.0) -> None:
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        target = target.float()
+        bce = torch.nn.functional.binary_cross_entropy_with_logits(
+            logits, target, reduction="none"
+        )
+        prob = torch.sigmoid(logits)
+        p_t = prob * target + (1.0 - prob) * (1.0 - target)
+        alpha_t = self.alpha * target + (1.0 - self.alpha) * (1.0 - target)
+        loss = alpha_t * ((1.0 - p_t) ** self.gamma) * bce
+        return loss.mean()
 
 
 class _SoftTeacherLoss(nn.Module):
@@ -266,10 +399,13 @@ class _SoftTeacherLoss(nn.Module):
         return (graph_loss / graph_count.clamp(min=1)).mean()
 
 
-def _build_criterion(case: Case) -> nn.Module:
+def _build_criterion(case: Case, cfg: "TrainConfig") -> nn.Module:
     """Build the loss function for a given training case."""
     if case == "direct":
-        return nn.BCEWithLogitsLoss()
+        return FocalBCEWithLogitsLoss(
+            alpha=cfg.focal_alpha,
+            gamma=cfg.focal_gamma,
+        )
     # edge case: graph-normalized MSE against BP soft labels
     return _SoftTeacherLoss()
 
@@ -335,8 +471,6 @@ class Trainer:
         _validate_dataset(val_ds, "val")
 
         if self.cfg.max_samples is not None:
-            from torch.utils.data import Subset
-
             train_idx = build_stratified_subset(
                 train_ds._setting_id,
                 self.cfg.max_samples,
@@ -361,13 +495,32 @@ class Trainer:
             train_ds = Subset(train_ds, train_idx.tolist())
             val_ds = Subset(val_ds, val_idx.tolist())
 
+        # Build weighted sampler for direct (imbalanced pos class).
+        train_sampler = None
+        train_shuffle = True
+        if self.cfg.case == "direct":
+            # Resolve underlying dataset and indices for sampler.
+            if isinstance(train_ds, Subset):
+                raw_ds = train_ds.dataset
+                subset_indices = train_ds.indices
+            else:
+                raw_ds = train_ds
+                subset_indices = None
+            train_sampler = build_direct_sampler(
+                raw_ds,
+                subset_indices,
+                pos_oversample_cap=self.cfg.direct_pos_oversample_cap,
+            )
+            train_shuffle = False  # mutually exclusive with sampler
+
         pin = self.device.type == "cuda"
         persistent = self.cfg.num_workers > 0
         prefetch = 2 if self.cfg.num_workers > 0 else None
         self.train_loader = DataLoader(
             train_ds,
             batch_size=self.cfg.batch_size,
-            shuffle=True,
+            shuffle=train_shuffle,
+            sampler=train_sampler,
             drop_last=True,
             num_workers=self.cfg.num_workers,
             pin_memory=pin,
@@ -449,7 +602,7 @@ class Trainer:
 
     def _setup_criterion(self) -> None:
         """Build loss function."""
-        self.criterion = _build_criterion(self.cfg.case)
+        self.criterion = _build_criterion(self.cfg.case, self.cfg)
 
     def _setup_amp(self) -> None:
         """Configure automatic mixed precision."""
