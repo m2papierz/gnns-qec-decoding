@@ -126,7 +126,7 @@ All hyperparameters are set in `configs/train.yaml`.  CLI arguments override con
 ```yaml
 case: "direct"
 backend: "compiled"         # "pytorch" | "compiled" (training); "cuda" (inference only)
-compile_mode: "reduce-overhead"
+compile_mode: "default"
 model:
   hidden_dim: 128
   num_layers: 6

@@ -256,6 +256,9 @@ class TrainConfig:
         and must not be used for training (no autograd backward).
     compile_mode : str
         ``torch.compile`` mode (only used when backend is ``"compiled"``).
+        Use ``"default"`` for training- GNN batches have dynamic shapes
+        (variable N/E) which cause ``"reduce-overhead"`` to record
+        excessive CUDA graphs and degrade performance over time.
     """
 
     case: Case = "direct"
@@ -277,7 +280,7 @@ class TrainConfig:
     resume: Path | None = None
     max_samples: int | None = None
     backend: str = "pytorch"
-    compile_mode: str = "reduce-overhead"
+    compile_mode: str = "default"
     focal_alpha: float = 0.25
     focal_gamma: float = 2.0
     direct_pos_oversample_cap: float = 10.0
@@ -349,7 +352,7 @@ class FocalBCEWithLogitsLoss(nn.Module):
     alpha : float
         Balancing factor for the positive class (default: 0.25).
     gamma : float
-        Focusing exponent - higher values suppress easy examples more
+        Focusing exponent- higher values suppress easy examples more
         aggressively (default: 2.0).
     """
 
@@ -570,12 +573,19 @@ class Trainer:
         ).to(self.device)
 
         if self.cfg.backend == "compiled" and self.device.type == "cuda":
+            # GNN batches have dynamic shapes (variable nodes/edges per
+            # batch due to mixed code distances). dynamic=True avoids
+            # recompilation per shape; fullgraph=False lets scatter ops
+            # cause graph breaks without error.
             self.model = torch.compile(
                 self.model,
                 mode=self.cfg.compile_mode,
-                fullgraph=False,  # GNN scatter ops cause graph breaks
+                dynamic=True,
+                fullgraph=False,
             )
-            logger.info("torch.compile enabled (mode=%s)", self.cfg.compile_mode)
+            logger.info(
+                "torch.compile enabled (mode=%s, dynamic=True)", self.cfg.compile_mode
+            )
 
         num_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         logger.info("Model: %d trainable parameters", num_params)

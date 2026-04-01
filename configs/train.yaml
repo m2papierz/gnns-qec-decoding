@@ -7,7 +7,12 @@ case: "direct"
 # Compute backend: "pytorch" or "compiled" for training.
 # "cuda" is inference-only (custom kernels lack autograd backward).
 backend: "pytorch"
-compile_mode: "reduce-overhead"
+
+# torch.compile mode (only used when backend is "compiled").
+# "default" - Triton kernel fusion, safe with dynamic GNN shapes.
+# "reduce-overhead" - adds CUDA graphs but causes recompilation on
+#   every new batch shape (GNN batches have variable N/E) => avoid.
+compile_mode: "default"
 
 # Data paths
 datasets_dir: "./data/datasets"
@@ -16,7 +21,7 @@ output_dir: "./outputs/runs"
 # Model architecture
 model:
   hidden_dim: 128
-  num_layers: 4
+  num_layers: 6
   dropout: 0.1
 
 # Optimisation
