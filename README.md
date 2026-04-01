@@ -3,24 +3,7 @@
 An end-to-end project on decoding topological quantum error-correcting codes with Graph Neural Networks (GNNs).
 
 > [!IMPORTANT]
-> Project is under active development — expect breaking changes (APIs/configs/dataset formats/checkpoints).
->
-> ### What works
-> - [x] Dataset generation pipeline (raw + processed)
-> - [x] MWPM baseline evaluation + sanity checks
-> - [x] GNN `direct` training & evaluation (research-grade, not yet optimized)
-> - [x] GNN `edge` training & evaluation with BP soft labels (research-grade, not yet optimized)
-> - [x] Swappable compute backend (`pytorch`, `compiled`, `cuda`)
-> - [x] Pluggable decoder interface (`decoders/`) — MWPM + BP+OSD (CUDA-Q)
-> - [x] Custom CUDA kernels for hot paths (symmetric edge features, fused norm+residual, graph-normalized BCE)
-> - [x] TensorRT deployment path via ``torch.compile`` + ``torch_tensorrt`` backend
->
-> ### In progress / experimental
-> - [ ] Benchmark harness (latency, throughput, memory across backends)
->
-> ### Benchmarks (planned)
-> - [ ] LER curves vs **(p, d, r)** + threshold estimate
-> - [ ] End-to-end **latency** and **throughput** (shots/s), incl. ablations: FP32 vs FP16/INT8, with/without custom kernels
+> **Learning project** — built to deepen hands-on understanding of GNN-based QEC decoding, detector graph construction, and the interplay between classical decoders (MWPM, BP+OSD) and learned models. Simplifications and approximations often appear in the design; this is not a production decoder.
 
 ## Background
 
