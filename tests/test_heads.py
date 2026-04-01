@@ -13,11 +13,11 @@ from gnn.models.heads import (
 
 
 def _make_graph(num_nodes: int = 6, num_edges: int = 10) -> Data:
-    """Create a minimal detector graph for testing."""
+    """Create a minimal detector graph for testing (enriched features)."""
     return Data(
-        x=torch.randint(0, 2, (num_nodes, 1)).float(),
+        x=torch.rand(num_nodes, 5),
         edge_index=torch.randint(0, num_nodes, (2, num_edges)),
-        edge_attr=torch.rand(num_edges, 2),
+        edge_attr=torch.rand(num_edges, 3),
         y=torch.zeros(1),
         logical=torch.zeros(1),
         setting_id=torch.tensor(0),
@@ -117,6 +117,8 @@ class TestQECDecoder:
     def test_forward_runs(self, case: str, batched: Batch) -> None:
         model = build_model(
             case,
+            node_dim=5,
+            edge_dim=3,
             hidden_dim=32,
             num_layers=2,
             dropout=0.0,
@@ -130,6 +132,8 @@ class TestQECDecoder:
     def test_direct_output_shape(self, batched: Batch) -> None:
         model = build_model(
             "direct",
+            node_dim=5,
+            edge_dim=3,
             hidden_dim=32,
             num_layers=2,
             dropout=0.0,
@@ -142,6 +146,8 @@ class TestQECDecoder:
     def test_edge_head_output_shape(self, batched: Batch) -> None:
         model = build_model(
             "edge",
+            node_dim=5,
+            edge_dim=3,
             hidden_dim=32,
             num_layers=2,
             dropout=0.0,
@@ -155,6 +161,8 @@ class TestQECDecoder:
     def test_backward_pass(self, batched: Batch) -> None:
         model = build_model(
             "direct",
+            node_dim=5,
+            edge_dim=3,
             hidden_dim=32,
             num_layers=2,
             dropout=0.0,
@@ -173,7 +181,7 @@ class TestBuildModel:
             build_model("nonexistent")  # type: ignore[arg-type]
 
     def test_returns_qec_decoder(self) -> None:
-        model = build_model("direct")
+        model = build_model("direct", node_dim=5, edge_dim=3)
         assert isinstance(model, QECDecoder)
 
     def test_encoder_config_propagates(self) -> None:
@@ -181,20 +189,23 @@ class TestBuildModel:
             "direct",
             hidden_dim=64,
             num_layers=4,
-            node_dim=3,
+            node_dim=5,
+            edge_dim=3,
         )
         assert model.encoder.hidden_dim == 64
         assert model.encoder.num_layers == 4
-        assert model.encoder.node_dim == 3
+        assert model.encoder.node_dim == 5
 
     def test_direct_observables(self) -> None:
         model = build_model(
             "direct",
+            node_dim=5,
+            edge_dim=3,
             hidden_dim=32,
             num_observables=5,
         )
         assert isinstance(model.head, LogicalHead)
 
     def test_edge_uses_edge_head(self) -> None:
-        model = build_model("edge", hidden_dim=32)
+        model = build_model("edge", node_dim=5, edge_dim=3, hidden_dim=32)
         assert isinstance(model.head, EdgeHead)

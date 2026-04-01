@@ -27,6 +27,12 @@ from tqdm import tqdm
 from decoders.base import BaseDecoder, DecoderConfig
 from decoders.bp_osd import BPOSDDecoder
 from decoders.mwpm import MWPMDecoder
+from gnn.dataset import (
+    EDGE_DIM,
+    NODE_DIM,
+    compute_inv_dist_sq,
+    compute_relative_node_features,
+)
 from gnn.metrics import EvalReport, SettingResult
 from gnn.models.heads import Case, QECDecoder, build_model
 from qec_generator.utils import read_json, undirected_edges
@@ -101,6 +107,8 @@ class Evaluator:
 
         model = build_model(
             cfg["case"],
+            node_dim=cfg["node_dim"],
+            edge_dim=cfg["edge_dim"],
             hidden_dim=cfg["hidden_dim"],
             num_layers=cfg["num_layers"],
             dropout=cfg.get("dropout", 0.0),
@@ -110,10 +118,13 @@ class Evaluator:
         model.eval()
 
         logger.info(
-            "Loaded model: case=%s, hidden_dim=%d, num_layers=%d (epoch %d)",
+            "Loaded model: case=%s, hidden_dim=%d, num_layers=%d, "
+            "node_dim=%d, edge_dim=%d (epoch %d)",
             cfg["case"],
             cfg["hidden_dim"],
             cfg["num_layers"],
+            cfg["node_dim"],
+            cfg["edge_dim"],
             ckpt.get("epoch", -1),
         )
         return model, cfg
@@ -127,28 +138,7 @@ class Evaluator:
         num_undirected: int,
         observable_flips_und: np.ndarray | None = None,
     ) -> BaseDecoder:
-        """Build a decoder from GNN edge logits for a single graph.
-
-        Parameters
-        ----------
-        meta : _SettingMeta
-            Setting metadata (detectors, observables, boundary).
-        und_pairs : ndarray, shape ``(U, 2)``
-            Undirected edge endpoints.
-        directed_logits : ndarray, shape ``(E,)``
-            Raw logits from the GNN edge head.
-        dir_to_undir : ndarray, shape ``(E,)``
-            Directed-to-undirected edge mapping.
-        num_undirected : int
-            Number of unique undirected edges.
-        observable_flips_und : ndarray or None, shape ``(U, num_obs)``
-            Per-undirected-edge observable flip mask.  Required for
-            ``"bp_osd"`` decoder; ignored by ``"mwpm"``.
-
-        Returns
-        -------
-        BaseDecoder
-        """
+        """Build a decoder from GNN edge logits for a single graph."""
         config = DecoderConfig(
             num_detectors=meta.num_detectors,
             num_observables=meta.num_observables,
@@ -216,13 +206,41 @@ class Evaluator:
     def _load_setting_data(
         self,
         meta: _SettingMeta,
-    ) -> tuple[torch.Tensor, torch.Tensor, np.ndarray, np.ndarray, np.ndarray]:
-        """Load graph and split arrays for one setting."""
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        torch.Tensor,
+    ]:
+        """Load graph, split arrays, and static node features.
+
+        Returns
+        -------
+        edge_index, edge_attr, syndrome, logical, edge_index_np, static_feats
+        """
         shard = self.datasets_dir / self.case / "shards" / meta.relpath
         graph_dir = shard / "graph"
 
         ei_np = np.load(graph_dir / "edge_index.npy").astype(np.int64)
         ea_np = np.load(graph_dir / "edge_attr.npy").astype(np.float32)
+
+        coords = np.load(graph_dir / "node_coords.npy").astype(np.float32)
+        boundary = np.load(graph_dir / "node_is_boundary.npy")
+
+        # Enrich edge_attr with inv_dist_sq.
+        ids = compute_inv_dist_sq(ei_np, coords, boundary)
+        ea_np = np.concatenate([ea_np, ids[:, None]], axis=1)
+
+        # Build static node features.
+        static_np = compute_relative_node_features(
+            coords,
+            boundary,
+            meta.distance,
+            meta.rounds,
+        )
+        static_feats = torch.from_numpy(static_np)  # (N, 4)
 
         edge_index = torch.from_numpy(ei_np).long()
         edge_attr = torch.from_numpy(ea_np).float()
@@ -232,10 +250,10 @@ class Evaluator:
         if logical.ndim == 1:
             logical = logical[:, np.newaxis]
 
-        return edge_index, edge_attr, syndrome, logical, ei_np
+        return edge_index, edge_attr, syndrome, logical, ei_np, static_feats
 
-    @staticmethod
     def _build_batch(
+        self,
         syndrome: np.ndarray,
         edge_index: torch.Tensor,
         edge_attr: torch.Tensor,
@@ -243,8 +261,23 @@ class Evaluator:
         num_detectors: int,
         start: int,
         end: int,
+        static_feats: torch.Tensor,
     ) -> Batch:
-        """Build a PyG Batch from a slice of syndrome shots (vectorized)."""
+        """Build a PyG Batch from a slice of syndrome shots (vectorized).
+
+        Parameters
+        ----------
+        syndrome : ndarray
+            Full syndrome array for the setting.
+        edge_index, edge_attr : Tensor
+            Graph topology and attributes (single graph, already enriched).
+        num_nodes, num_detectors : int
+            Graph size parameters.
+        start, end : int
+            Shot range within *syndrome*.
+        static_feats : Tensor, shape ``(num_nodes, 4)``
+            Static node features ``[is_boundary, d_h, d_v, d_t]``.
+        """
         n = end - start
 
         det = torch.from_numpy(
@@ -253,15 +286,17 @@ class Evaluator:
         if num_nodes > num_detectors:
             pad = torch.zeros(n, num_nodes - num_detectors, dtype=torch.float32)
             det = torch.cat([det, pad], dim=1)
-        x = det.reshape(-1, 1)
+
+        # x = [syndrome, is_boundary, d_h, d_v, d_t]  shape (n*N, 5)
+        syndrome_3d = det.unsqueeze(2)  # (n, N, 1)
+        static_3d = static_feats.unsqueeze(0).expand(n, -1, -1)  # (n, N, 4)
+        x = torch.cat([syndrome_3d, static_3d], dim=2).reshape(-1, NODE_DIM)
 
         offsets = torch.arange(n, dtype=torch.long).unsqueeze(1) * num_nodes
         ei_rep = edge_index.unsqueeze(0).expand(n, -1, -1) + offsets.unsqueeze(1)
         ei_batch = ei_rep.permute(1, 0, 2).reshape(2, -1)
 
-        ea_batch = (
-            edge_attr.unsqueeze(0).expand(n, -1, -1).reshape(-1, edge_attr.shape[1])
-        )
+        ea_batch = edge_attr.unsqueeze(0).expand(n, -1, -1).reshape(-1, EDGE_DIM)
 
         batch_vec = torch.arange(n, dtype=torch.long).repeat_interleave(num_nodes)
 
@@ -281,6 +316,7 @@ class Evaluator:
         logical: np.ndarray,
         num_nodes: int,
         num_detectors: int,
+        static_feats: torch.Tensor,
     ) -> tuple[int, int]:
         """Evaluate direct case: observable prediction from graph-level logits."""
         n = syndrome.shape[0]
@@ -296,6 +332,7 @@ class Evaluator:
                 num_detectors,
                 off,
                 end,
+                static_feats,
             ).to(self.device)
 
             logits = self.model(batch)
@@ -313,6 +350,7 @@ class Evaluator:
         syndrome: np.ndarray,
         logical: np.ndarray,
         meta: _SettingMeta,
+        static_feats: torch.Tensor,
     ) -> tuple[int, int, float | None]:
         """Evaluate edge case: per-shot GNN weights => decoder => LER."""
         n = syndrome.shape[0]
@@ -329,8 +367,7 @@ class Evaluator:
                 raise FileNotFoundError(
                     f"BP+OSD requires observable_flips.npy: {obs_path}"
                 )
-            obs_dir = np.load(obs_path)  # (E_directed, num_obs)
-            # Collapse directed => undirected (first occurrence per edge).
+            obs_dir = np.load(obs_path)
             first_idx = np.full(num_und, -1, dtype=np.int64)
             for e, uid in enumerate(dir_to_undir):
                 if first_idx[uid] == -1:
@@ -350,6 +387,7 @@ class Evaluator:
                 meta.num_detectors,
                 off,
                 end,
+                static_feats,
             ).to(self.device)
 
             logits_np = self.model(batch).cpu().numpy()
@@ -375,14 +413,7 @@ class Evaluator:
         return n, int(shot_errors.sum()), None
 
     def run(self) -> EvalReport:
-        """
-        Evaluate model on all settings.
-
-        Returns
-        -------
-        EvalReport
-            Full evaluation report with per-setting results.
-        """
+        """Evaluate model on all settings."""
         settings = self._load_settings()
         baseline = self._load_baseline()
 
@@ -402,6 +433,8 @@ class Evaluator:
                 "split": self.split,
                 "hidden_dim": self.cfg["hidden_dim"],
                 "num_layers": self.cfg["num_layers"],
+                "node_dim": self.cfg["node_dim"],
+                "edge_dim": self.cfg["edge_dim"],
                 "device": str(self.device),
             }
         )
@@ -410,7 +443,9 @@ class Evaluator:
             t0 = time.perf_counter()
 
             try:
-                ei, ea, syndrome, logical, ei_np = self._load_setting_data(meta)
+                ei, ea, syndrome, logical, ei_np, static_feats = (
+                    self._load_setting_data(meta)
+                )
             except FileNotFoundError as exc:
                 logger.warning(
                     "Skipping d=%d r=%d p=%s: %s",
@@ -429,6 +464,7 @@ class Evaluator:
                     logical,
                     meta.num_nodes,
                     meta.num_detectors,
+                    static_feats,
                 )
                 edge_acc = None
             else:
@@ -439,6 +475,7 @@ class Evaluator:
                     syndrome,
                     logical,
                     meta,
+                    static_feats,
                 )
 
             elapsed = time.perf_counter() - t0

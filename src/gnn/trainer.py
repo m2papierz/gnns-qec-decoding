@@ -13,7 +13,7 @@ import random
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Sequence
 
 import numpy as np
 import torch
@@ -327,6 +327,10 @@ class Trainer:
             split="val",
         )
 
+        # Feature dimensions (fixed by dataset).
+        self._node_dim = train_ds.node_dim
+        self._edge_dim = train_ds.edge_dim
+
         _validate_dataset(train_ds, "train")
         _validate_dataset(val_ds, "val")
 
@@ -393,6 +397,8 @@ class Trainer:
 
         self.model = build_model(
             self.cfg.case,
+            node_dim=self._node_dim,
+            edge_dim=self._edge_dim,
             hidden_dim=self.cfg.hidden_dim,
             num_layers=self.cfg.num_layers,
             dropout=self.cfg.dropout,
@@ -490,6 +496,8 @@ class Trainer:
         config_dict["datasets_dir"] = str(self.cfg.datasets_dir)
         config_dict["output_dir"] = str(self.cfg.output_dir)
         config_dict["resume"] = str(self.cfg.resume) if self.cfg.resume else None
+        config_dict["node_dim"] = self._node_dim
+        config_dict["edge_dim"] = self._edge_dim
 
         path = self._run_dir / "config.json"
         path.write_text(json.dumps(config_dict, indent=2), encoding="utf-8")
@@ -617,6 +625,9 @@ class Trainer:
     def save_checkpoint(self, path: Path, epoch: int, best_metric: float) -> None:
         """Save a training checkpoint."""
         path.parent.mkdir(parents=True, exist_ok=True)
+        config_dict = asdict(self.cfg)
+        config_dict["node_dim"] = self._node_dim
+        config_dict["edge_dim"] = self._edge_dim
         torch.save(
             {
                 "epoch": epoch,
@@ -624,7 +635,7 @@ class Trainer:
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "scheduler_state_dict": self.scheduler.state_dict(),  # type: ignore[attr-defined]
                 "best_metric": best_metric,
-                "config": asdict(self.cfg),
+                "config": config_dict,
             },
             path,
         )
@@ -758,19 +769,22 @@ class Trainer:
 
 def _validate_dataset(ds: MixedSurfaceCodeDataset, label: str) -> None:
     """Smoke-test dataset by loading first sample; raises on bad shapes."""
+    from gnn.dataset import EDGE_DIM, NODE_DIM
+
     sample = ds[0]
-    if sample.x.ndim != 2 or sample.x.shape[1] != 1:
+    if sample.x.ndim != 2 or sample.x.shape[1] != NODE_DIM:
         raise ValueError(
-            f"{label} dataset: expected x shape (N, 1), got {tuple(sample.x.shape)}"
+            f"{label} dataset: expected x shape (N, {NODE_DIM}), "
+            f"got {tuple(sample.x.shape)}"
         )
     if sample.edge_index.shape[0] != 2:
         raise ValueError(
             f"{label} dataset: expected edge_index shape (2, E), "
             f"got {tuple(sample.edge_index.shape)}"
         )
-    if sample.edge_attr.ndim != 2:
+    if sample.edge_attr.ndim != 2 or sample.edge_attr.shape[1] != EDGE_DIM:
         raise ValueError(
-            f"{label} dataset: expected edge_attr shape (E, D), "
+            f"{label} dataset: expected edge_attr shape (E, {EDGE_DIM}), "
             f"got {tuple(sample.edge_attr.shape)}"
         )
     if sample.y.ndim < 1:

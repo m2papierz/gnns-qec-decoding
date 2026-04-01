@@ -26,7 +26,7 @@ Batch ──► encoder ──►(h, edge_h)                                    
 
 | Component | Choice | Rationale |
 |-----------|--------|-----------|
-| Convolution | GINEConv | Edge features (error prob, weight) enter messages natively; 1-WL expressiveness |
+| Convolution | GINEConv | Edge features (error prob, weight, inv distance) enter messages natively; 1-WL expressiveness |
 | Edge update | `MLP(h_src + h_dst, \|h_src − h_dst\|, e)` | Symmetric, learns edge representations jointly with nodes |
 | Normalisation | LayerNorm (nodes and edges) | Stable across variable graph sizes in a batch (d=3 and d=7 mixed) |
 | Skip connections | Additive residual per layer (nodes and edges) | Enables deeper networks without degradation |
@@ -34,8 +34,10 @@ Batch ──► encoder ──►(h, edge_h)                                    
 
 Input/output:
 
-- **In**: `x (N, 1)` syndrome bits, `edge_attr (E, 2)` `[error_prob, weight]`
+- **In**: `x (N, 5)` node features, `edge_attr (E, 3)` edge features
 - **Out**: `h (N, hidden_dim)` node embeddings, `edge_h (E, hidden_dim)` edge embeddings
+
+See [Feature engineering](#feature-engineering) below for the full feature specification.
 
 ### Swappable compute operations (`models/ops.py`)
 
@@ -66,8 +68,8 @@ Set via `QECDEC_BACKEND` env var or `set_backend()` at runtime.
 ```python
 from gnn.models import build_model
 
-model = build_model("direct", hidden_dim=128, num_layers=6)
-model = build_model("edge", hidden_dim=128, num_layers=6)
+model = build_model("direct", node_dim=5, edge_dim=3, hidden_dim=128, num_layers=6)
+model = build_model("edge",   node_dim=5, edge_dim=3, hidden_dim=128, num_layers=6)
 ```
 
 `edge` uses `EdgeHead` — it differs from `direct` in loss
@@ -149,6 +151,7 @@ Programmatic access: `TrainConfig.from_yaml("configs/train.yaml")`.
 
 ### Training details
 
+- **Sampling**: when `max_samples` is set, uses stratified random sampling across setting IDs (equal quota per `(d, r, p)` setting) instead of taking the first N samples
 - **Optimiser**: AdamW (weight_decay configurable, default 1e-5)
 - **Scheduler**: Linear warmup (5% of epochs, from 1% of peak lr) followed by cosine annealing to lr/50
 - **Mixed precision**: AMP enabled automatically on CUDA (GradScaler + autocast)
@@ -241,11 +244,52 @@ Each `__getitem__` returns a PyG `Data` with:
 
 | Field | Shape | Description |
 |-------|-------|-------------|
-| `x` | `(N, 1)` | Syndrome bits (0/1 float), boundary node = 0 |
+| `x` | `(N, 5)` | Node features (see below) |
 | `edge_index` | `(2, E)` | Directed COO (both directions stored) |
-| `edge_attr` | `(E, 2)` | `[error_prob, weight]` |
+| `edge_attr` | `(E, 3)` | Edge features (see below) |
 | `y` | varies | `(num_obs,)` for direct; `(E,)` float BP marginals for edge |
 | `logical` | `(num_obs,)` | Always present for evaluation |
 | `setting_id` | scalar | Setting index for debugging |
 
+The dataset exposes `node_dim` and `edge_dim` attributes so the trainer can construct the model with matching input dimensions.  These dimensions are persisted in the checkpoint for the evaluator.
+
 Important: do not move graph tensors to GPU in the dataset (breaks `num_workers > 0`).  The training loop calls `batch.to(device)`.
+
+## Feature engineering
+
+### Node features (`node_dim = 5`)
+
+| Column | Name | Formula | Range | Description |
+|--------|------|---------|-------|-------------|
+| 0 | `syndrome` | per-shot dynamic | {0, 1} | Detector fired (1) or not (0); boundary node = 0 |
+| 1 | `is_boundary` | static | {0, 1} | 1 for the virtual boundary node |
+| 2 | `d_horizontal` | `x / (2d)` | [0, 1] | Normalised distance to horizontal (north) boundary |
+| 3 | `d_vertical` | `y / (2d)` | [0, 1] | Normalised distance to vertical (west) boundary |
+| 4 | `d_temporal` | `t / r` | [0, 1] | Normalised temporal position within the measurement rounds |
+
+Normalisation by `2d` (spatial) and `r` (temporal) makes feature semantics transfer across code distances: "0.5 = centre of the code" regardless of whether `d = 3` or `d = 7`.  For the boundary node (NaN coordinates from Stim), all positional features are 0.
+
+### Edge features (`edge_dim = 3`)
+
+| Column | Name | Source | Description |
+|--------|------|--------|-------------|
+| 0 | `error_prob` | existing | Physical error probability from the detector error model |
+| 1 | `weight` | existing | MWPM weight, typically `-log(p / (1-p))` |
+| 2 | `inv_dist_sq` | computed | Squared inverse Chebyshev distance (see below) |
+
+The `inv_dist_sq` feature encodes spatial/temporal proximity between connected detectors:
+
+```
+inv_dist_sq = 1 / max(|Δx|, |Δy|, |Δt|)²
+```
+
+Edges touching the boundary node get `inv_dist_sq = 0`.  On typical rotated surface code detector graphs this produces three discrete values:
+
+| `inv_dist_sq` | Chebyshev distance | Edge type |
+|---------------|-------------------|-----------|
+| 1.0 | 1 | Temporal neighbour (same spatial position, adjacent round) |
+| 0.25 | 2 | Spatial neighbour (same round, adjacent stabiliser) |
+| 0.0625 | 4 | Distant space-time diagonal |
+| 0.0 | — | Boundary edge |
+
+This provides information orthogonal to `error_prob`: verified on Stim-generated d=5 graphs, there are 45 unique `(error_prob, inv_dist_sq)` combinations.

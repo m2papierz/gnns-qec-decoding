@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 import stim
 
-from gnn.dataset import _unpack_bits_row
 from qec_generator.graph import build_detector_graph
 from qec_generator.utils import undirected_edges
 
@@ -82,61 +81,6 @@ class TestUndirectedEdges:
         assert dir_weights[0] == dir_weights[1]
         assert dir_weights[2] == dir_weights[3]
         assert dir_weights[4] == dir_weights[5]
-
-
-class TestUnpackBitsRow:
-    """Bit-packed MWPM teacher label decoding."""
-
-    def test_basic_unpack(self) -> None:
-        """Known bit pattern unpacks correctly with little bitorder."""
-        # 0b00000101 = 5 in little-endian: bits 0,2 are set
-        packed = np.array([5], dtype=np.uint8)
-        result = _unpack_bits_row(packed, num_bits=8)
-
-        assert result.shape == (8,)
-        assert result[0] == 1
-        assert result[1] == 0
-        assert result[2] == 1
-        assert result.sum() == 2
-
-    def test_truncation(self) -> None:
-        """Only num_bits bits are returned, rest discarded."""
-        packed = np.array([0xFF], dtype=np.uint8)
-        result = _unpack_bits_row(packed, num_bits=3)
-
-        assert result.shape == (3,)
-        np.testing.assert_array_equal(result, [1, 1, 1])
-
-    def test_multi_byte(self) -> None:
-        """Unpacking spans multiple bytes."""
-        # byte0=0b00000001 (bit0=1), byte1=0b00000001 (bit8=1)
-        packed = np.array([1, 1], dtype=np.uint8)
-        result = _unpack_bits_row(packed, num_bits=10)
-
-        assert result.shape == (10,)
-        assert result[0] == 1
-        assert result[8] == 1
-        assert result.sum() == 2
-
-    def test_all_zeros(self) -> None:
-        packed = np.array([0, 0], dtype=np.uint8)
-        result = _unpack_bits_row(packed, num_bits=12)
-
-        assert result.shape == (12,)
-        assert result.sum() == 0
-
-    def test_roundtrip_with_packbits(self) -> None:
-        """Pack => unpack roundtrip preserves data."""
-        original = np.array([1, 0, 1, 1, 0, 0, 1], dtype=np.uint8)
-        packed = np.packbits(original[None, :], axis=1, bitorder="little")[0]
-        recovered = _unpack_bits_row(packed, num_bits=7)
-
-        np.testing.assert_array_equal(recovered, original)
-
-    def test_dtype_is_uint8(self) -> None:
-        packed = np.array([0], dtype=np.uint8)
-        result = _unpack_bits_row(packed, num_bits=4)
-        assert result.dtype == np.uint8
 
 
 class TestBuildDetectorGraph:
