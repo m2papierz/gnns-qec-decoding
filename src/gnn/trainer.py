@@ -32,6 +32,85 @@ from gnn.models.heads import QECDecoder, build_model
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Stratified subset selection
+# ---------------------------------------------------------------------------
+
+
+def build_stratified_subset(
+    setting_ids: np.ndarray,
+    max_samples: int,
+    seed: int,
+) -> np.ndarray:
+    """Build a stratified random subset balanced across setting IDs.
+
+    Allocates an equal quota to each unique setting.  Leftover capacity
+    (from settings with fewer samples than their quota) is filled by
+    sampling uniformly from the remaining pool, preserving overall
+    balance as much as possible.
+
+    Parameters
+    ----------
+    setting_ids : ndarray, shape ``(N,)``, int
+        Per-sample setting identifier (e.g. from
+        ``MixedSurfaceCodeDataset._setting_id``).
+    max_samples : int
+        Maximum number of samples to select.  Must be >= 1.
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    ndarray, shape ``(M,)``, int64
+        Selected indices (shuffled), where ``M = min(max_samples, N)``.
+
+    Raises
+    ------
+    ValueError
+        If *max_samples* < 1 or *setting_ids* is empty.
+    """
+    if max_samples < 1:
+        raise ValueError(f"max_samples must be >= 1, got {max_samples}")
+    n_total = len(setting_ids)
+    if n_total == 0:
+        raise ValueError("setting_ids must be non-empty")
+
+    # Fast path: requesting everything — just shuffle.
+    if max_samples >= n_total:
+        rng = np.random.default_rng(seed)
+        idx = np.arange(n_total, dtype=np.int64)
+        rng.shuffle(idx)
+        return idx
+
+    rng = np.random.default_rng(seed)
+    unique_sids = np.unique(setting_ids)
+    n_settings = len(unique_sids)
+
+    per_setting = max_samples // n_settings
+
+    chosen_parts: list[np.ndarray] = []
+    leftover_parts: list[np.ndarray] = []
+
+    for sid in unique_sids:
+        indices = np.flatnonzero(setting_ids == sid).astype(np.int64)
+        rng.shuffle(indices)
+        take = min(per_setting, len(indices))
+        chosen_parts.append(indices[:take])
+        if take < len(indices):
+            leftover_parts.append(indices[take:])
+
+    chosen = np.concatenate(chosen_parts)
+    remaining = max_samples - len(chosen)
+
+    if remaining > 0 and leftover_parts:
+        leftovers = np.concatenate(leftover_parts)
+        rng.shuffle(leftovers)
+        chosen = np.concatenate([chosen, leftovers[:remaining]])
+
+    rng.shuffle(chosen)
+    return chosen
+
+
 @dataclass
 class TrainConfig:
     """
@@ -254,8 +333,29 @@ class Trainer:
         if self.cfg.max_samples is not None:
             from torch.utils.data import Subset
 
-            train_ds = Subset(train_ds, range(min(self.cfg.max_samples, len(train_ds))))
-            val_ds = Subset(val_ds, range(min(self.cfg.max_samples // 5, len(val_ds))))
+            train_idx = build_stratified_subset(
+                train_ds._setting_id,
+                self.cfg.max_samples,
+                self.cfg.seed,
+            )
+            val_cap = min(
+                len(val_ds),
+                max(20_000, self.cfg.max_samples // 5),
+            )
+            val_idx = build_stratified_subset(
+                val_ds._setting_id,
+                val_cap,
+                self.cfg.seed + 1,
+            )
+            logger.info(
+                "Stratified subset: train %d -> %d, val %d -> %d",
+                len(train_ds),
+                len(train_idx),
+                len(val_ds),
+                len(val_idx),
+            )
+            train_ds = Subset(train_ds, train_idx.tolist())
+            val_ds = Subset(val_ds, val_idx.tolist())
 
         pin = self.device.type == "cuda"
         persistent = self.cfg.num_workers > 0
