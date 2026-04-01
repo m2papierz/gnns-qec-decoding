@@ -449,6 +449,7 @@ class Trainer:
 
         self.start_epoch: int = 0
         self.best_metric: float = float("inf")
+        self._decision_threshold: float = 0.0
         self.history: list[Dict[str, Any]] = []
 
         self._run_dir: Path
@@ -646,10 +647,12 @@ class Trainer:
 
         self.start_epoch = ckpt.get("epoch", 0) + 1
         self.best_metric = ckpt.get("best_metric", float("inf"))
+        self._decision_threshold = ckpt.get("decision_threshold", 0.0)
         logger.info(
-            "Resuming from epoch %d (best_metric=%.6f)",
+            "Resuming from epoch %d (best_metric=%.6f, threshold=%.3f)",
             self.start_epoch,
             self.best_metric,
+            self._decision_threshold,
         )
 
     def _save_config(self) -> None:
@@ -784,6 +787,77 @@ class Trainer:
 
         return metrics
 
+    @torch.no_grad()
+    def calibrate_threshold(self) -> float:
+        """Sweep decision thresholds on the validation set for ``direct``.
+
+        Collects all per-graph logits from the validation loader, then
+        evaluates LER at each candidate threshold in logit space.
+        Returns the threshold that minimises LER.
+
+        This is cheap (single forward pass over val + vectorised sweep)
+        and should be called once after training completes.
+
+        Returns
+        -------
+        float
+            Optimal logit threshold (0.0 = sigmoid 0.5 default).
+        """
+        if self.cfg.case != "direct":
+            return 0.0
+
+        self.model.eval()
+        use_amp = self.device.type == "cuda"
+
+        all_logits: list[torch.Tensor] = []
+        all_targets: list[torch.Tensor] = []
+
+        for batch in self.val_loader:
+            batch = batch.to(self.device)
+            with torch.amp.autocast(
+                device_type=self.device.type,
+                enabled=use_amp,
+            ):
+                logits = self.model(batch)
+            all_logits.append(logits.cpu())
+            all_targets.append(batch.y.view_as(logits).cpu())
+
+        if not all_logits:
+            return 0.0
+
+        logits_cat = torch.cat(all_logits, dim=0)  # (N_val, num_obs)
+        targets_cat = torch.cat(all_targets, dim=0)  # (N_val, num_obs)
+
+        # Sweep thresholds in logit space.
+        thresholds = torch.linspace(-4.0, 4.0, steps=81)
+        best_threshold = 0.0
+        best_ler = float("inf")
+
+        for thr in thresholds:
+            pred = (logits_cat > thr.item()).float()
+            errors = (pred != targets_cat).any(dim=1).sum().item()
+            ler = errors / logits_cat.shape[0]
+            if ler < best_ler:
+                best_ler = ler
+                best_threshold = thr.item()
+
+        # Log improvement over default.
+        default_pred = (logits_cat > 0.0).float()
+        default_ler = (default_pred != targets_cat).any(
+            dim=1
+        ).sum().item() / logits_cat.shape[0]
+
+        logger.info(
+            "Threshold calibration: default(0.0) LER=%.6f, "
+            "best(%.3f) LER=%.6f (delta=%.6f)",
+            default_ler,
+            best_threshold,
+            best_ler,
+            best_ler - default_ler,
+        )
+
+        return best_threshold
+
     def save_checkpoint(self, path: Path, epoch: int, best_metric: float) -> None:
         """Save a training checkpoint."""
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -797,6 +871,7 @@ class Trainer:
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "scheduler_state_dict": self.scheduler.state_dict(),  # type: ignore[attr-defined]
                 "best_metric": best_metric,
+                "decision_threshold": self._decision_threshold,
                 "config": config_dict,
             },
             path,
@@ -925,6 +1000,25 @@ class Trainer:
             self.best_metric,
         )
         logger.info("Best checkpoint: %s", self._best_path)
+
+        # Calibrate decision threshold for direct case.
+        if self.cfg.case == "direct" and self._best_path.exists():
+            # Reload best model weights for calibration.
+            ckpt = torch.load(self._best_path, weights_only=False)
+            self.model.load_state_dict(ckpt["model_state_dict"])
+
+            self._decision_threshold = self.calibrate_threshold()
+
+            # Re-save with calibrated threshold.
+            self.save_checkpoint(
+                self._best_path,
+                ckpt["epoch"],
+                self.best_metric,
+            )
+            logger.info(
+                "Checkpoint updated with decision_threshold=%.3f",
+                self._decision_threshold,
+            )
 
         return self._best_path
 

@@ -93,10 +93,13 @@ class Evaluator:
         self.batch_size = batch_size
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model, self.cfg = self._load_model()
+        self.model, self.cfg, self._ckpt = self._load_model()
         self.case: Case = self.cfg["case"]
 
-    def _load_model(self) -> tuple[QECDecoder, Dict[str, Any]]:
+        # Decision threshold for direct case (calibrated on val during training).
+        self._decision_threshold: float = self._ckpt.get("decision_threshold", 0.0)
+
+    def _load_model(self) -> tuple[QECDecoder, Dict[str, Any], Dict[str, Any]]:
         """Load model from checkpoint."""
         ckpt = torch.load(
             self.checkpoint,
@@ -117,17 +120,19 @@ class Evaluator:
         model = model.to(self.device)
         model.eval()
 
+        threshold = ckpt.get("decision_threshold", 0.0)
         logger.info(
             "Loaded model: case=%s, hidden_dim=%d, num_layers=%d, "
-            "node_dim=%d, edge_dim=%d (epoch %d)",
+            "node_dim=%d, edge_dim=%d, threshold=%.3f (epoch %d)",
             cfg["case"],
             cfg["hidden_dim"],
             cfg["num_layers"],
             cfg["node_dim"],
             cfg["edge_dim"],
+            threshold,
             ckpt.get("epoch", -1),
         )
-        return model, cfg
+        return model, cfg, ckpt
 
     def _make_decoder(
         self,
@@ -344,7 +349,7 @@ class Evaluator:
             ).to(self.device)
 
             logits = self.model(batch)
-            pred = (logits > 0.0).cpu().numpy().astype(np.uint8)
+            pred = (logits > self._decision_threshold).cpu().numpy().astype(np.uint8)
             num_errors += int(np.any(pred != logical[off:end], axis=1).sum())
 
         return n, num_errors
@@ -443,6 +448,7 @@ class Evaluator:
                 "num_layers": self.cfg["num_layers"],
                 "node_dim": self.cfg["node_dim"],
                 "edge_dim": self.cfg["edge_dim"],
+                "decision_threshold": self._decision_threshold,
                 "device": str(self.device),
             }
         )
