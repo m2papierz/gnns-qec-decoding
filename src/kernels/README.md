@@ -43,23 +43,28 @@ JIT is slower on first run but doesn't require the build step.
 
 ## Usage
 
+> [!IMPORTANT]
+> The `"cuda"` backend is **inference and benchmarking only**. The custom kernels do not implement autograd backward passes. For training, use `"pytorch"` or `"compiled"`.
+
 Kernels activate automatically when the compute backend is set to `"cuda"`:
 
 ```python
 from gnn.models.ops import set_backend
-set_backend("cuda")
+set_backend("cuda")  # inference only - no autograd backward
 ```
 
 Or via environment variable:
 
 ```bash
-QECDEC_BACKEND=cuda uv run scripts/train_gnn.py -c configs/train.yaml
+QECDEC_BACKEND=cuda uv run scripts/eval_gnn.py \
+    --checkpoint outputs/runs/direct/best.pt
 ```
 
-Or via CLI flag:
+Or in benchmarking:
 
 ```bash
-uv run scripts/train_gnn.py --backend cuda -c configs/train.yaml
+uv run src/deploy/export_trt.py \
+    --checkpoint outputs/runs/direct/best.pt --backends cuda
 ```
 
 If kernels are not built, `set_backend("cuda")` falls back to PyTorch
@@ -82,7 +87,7 @@ Tests are automatically skipped without a GPU or without built kernels.
 
 One thread-block per edge, each block processes one edge's hidden dimension.
 
-- **Template dispatch**: `<bool UseVec4>` selected at compile time — float4 vectorised path (when `hidden_dim % 4 == 0`) or scalar fallback, with zero branch cost in the hot loop.
+- **Template dispatch**: `<bool UseVec4>` selected at compile time - float4 vectorised path (when `hidden_dim % 4 == 0`) or scalar fallback, with zero branch cost in the hot loop.
 - **`__launch_bounds__(256)`** for register allocation hints.
 - High parallelism from massive block count (batch×edges ≈ 100k+ blocks), not from wide blocks.
 
@@ -91,7 +96,7 @@ One thread-block per edge, each block processes one edge's hidden dimension.
 One thread-block per row (node or edge embedding).
 
 - **2-pass instead of 3**: mean and variance computed together via `sum + sum_sq` in a single read of the input row, then `var = E[x²] - E[x]²`. Saves ~14% bandwidth vs the naive mean-then-variance approach. Numerically sufficient for float32 at `hidden_dim ≤ 512` (verified: max error 2.4e-7 vs Welford gold standard).
-- **Shared memory cache** for gamma/beta vectors — loaded cooperatively once per block, eliminating repeated global reads in the normalise+scale pass.
+- **Shared memory cache** for gamma/beta vectors - loaded cooperatively once per block, eliminating repeated global reads in the normalise+scale pass.
 - **Template `<bool Training>`**: inference path compiled without curand state allocation (~40 registers freed), dropout branch, or scale computation.
 - **Reproducible seed** from PyTorch's default CUDA generator (`at::cuda::detail::getDefaultCUDAGenerator()`) instead of non-deterministic `steady_clock::now()`.
 
@@ -106,8 +111,8 @@ Two-kernel pipeline: scatter (BCE => per-graph accumulators) then reduce (mean-o
 ### Common
 
 All kernels use:
-- `at::cuda::getCurrentCUDAStream()` — correct behaviour with AMP, DataParallel, and multi-stream pipelines.
-- `C10_CUDA_KERNEL_LAUNCH_CHECK()` — catches asynchronous kernel launch failures.
+- `at::cuda::getCurrentCUDAStream()` - correct behaviour with AMP, DataParallel, and multi-stream pipelines.
+- `C10_CUDA_KERNEL_LAUNCH_CHECK()` - catches asynchronous kernel launch failures.
 - `__restrict__` pointer hints on all kernel arguments.
 - Anonymous namespaces for internal symbols.
 

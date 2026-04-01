@@ -9,11 +9,16 @@ Backends
 --------
 ``"pytorch"``
     Pure PyTorch reference implementations (default, always available).
+    Full autograd support — safe for training and inference.
 ``"compiled"``
     ``torch.compile``-wrapped PyTorch — identical numerics, kernel fusion
-    handled by the compiler.
+    handled by the compiler.  Full autograd support — recommended for
+    training on GPU.
 ``"cuda"``
     Hand-written CUDA kernels loaded from ``kernels`` (requires build).
+    **Inference only** — these are forward-pass kernels without autograd
+    backward implementations.  Using this backend for training will
+    silently break gradient propagation.
 """
 
 from __future__ import annotations

@@ -71,7 +71,7 @@ def build_stratified_subset(
     if n_total == 0:
         raise ValueError("setting_ids must be non-empty")
 
-    # Fast path: requesting everything — just shuffle.
+    # Fast path: requesting everything - just shuffle.
     if max_samples >= n_total:
         rng = np.random.default_rng(seed)
         idx = np.arange(n_total, dtype=np.int64)
@@ -116,10 +116,10 @@ def build_direct_sampler(
 
     Combines two sources of per-sample reweighting:
 
-    1. **Distance weight** — larger ``d`` gets higher weight so that
+    1. **Distance weight** - larger ``d`` gets higher weight so that
        harder settings are not drowned out by easy small-distance ones.
        Formula: ``w_d = distance / d_min``.
-    2. **Class weight** — positive samples (any observable flipped) are
+    2. **Class weight** - positive samples (any observable flipped) are
        up-weighted to counter the rarity of logical errors at low ``p``.
        Formula: ``w_cls = min(n_neg / n_pos, pos_oversample_cap)`` for
        positive samples, ``1.0`` for negatives.
@@ -251,7 +251,9 @@ class TrainConfig:
     max_samples : int or None
         Cap on training samples (validation capped at ``max_samples // 5``).
     backend : str
-        Compute backend: ``"pytorch"``, ``"compiled"``, or ``"cuda"``.
+        Compute backend: ``"pytorch"`` (default) or ``"compiled"``
+        (recommended on GPU).  The ``"cuda"`` backend is inference-only
+        and must not be used for training (no autograd backward).
     compile_mode : str
         ``torch.compile`` mode (only used when backend is ``"compiled"``).
     """
@@ -347,7 +349,7 @@ class FocalBCEWithLogitsLoss(nn.Module):
     alpha : float
         Balancing factor for the positive class (default: 0.25).
     gamma : float
-        Focusing exponent — higher values suppress easy examples more
+        Focusing exponent - higher values suppress easy examples more
         aggressively (default: 2.0).
     """
 

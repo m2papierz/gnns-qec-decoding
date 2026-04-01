@@ -3,7 +3,7 @@
 An end-to-end project on decoding topological quantum error-correcting codes with Graph Neural Networks (GNNs).
 
 > [!IMPORTANT]
-> **Learning project** — built to deepen hands-on understanding of GNN-based QEC decoding, detector graph construction, and the interplay between classical decoders (MWPM, BP+OSD) and learned models. Simplifications and approximations often appear in the design; this is not a production decoder.
+> **Learning project** - built to deepen hands-on understanding of GNN-based QEC decoding, detector graph construction, and the interplay between classical decoders (MWPM, BP+OSD) and learned models. Simplifications and approximations often appear in the design; this is not a production decoder.
 
 ## Background
 
@@ -113,11 +113,11 @@ uv run scripts/train_gnn.py -c configs/train.yaml --backend compiled
 uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt \
     --baseline outputs/results/mwpm_baseline.json
 
-# Evaluate edge model — GNN weights fed into MWPM
+# Evaluate edge model - GNN weights fed into MWPM
 uv run scripts/eval_gnn.py --checkpoint outputs/runs/edge/best.pt \
     --decoder mwpm --baseline outputs/results/mwpm_baseline.json
 
-# Evaluate edge model — GNN weights fed into BP+OSD (CUDA-Q)
+# Evaluate edge model - GNN weights fed into BP+OSD (CUDA-Q)
 uv run scripts/eval_gnn.py --checkpoint outputs/runs/edge/best.pt \
     --decoder bp_osd --baseline outputs/results/bp_osd_baseline.json
 ```
@@ -152,7 +152,7 @@ The TensorRT backend uses `torch.compile` with the `torch_tensorrt` backend, whi
 
 See [`src/deploy/README.md`](src/deploy/README.md) for Python API, benchmark output format, and details on TRT graph partitioning.
 
-See [`src/kernels/README.md`](src/kernels/README.md) for custom CUDA kernels used with the `cuda` compute backend.
+See [`src/kernels/README.md`](src/kernels/README.md) for custom CUDA kernels used with the `cuda` compute backend (inference only).
 
 ## Benchmarks and plots
 

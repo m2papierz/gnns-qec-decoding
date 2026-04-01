@@ -1,4 +1,4 @@
-# gnn — GNN-Based QEC Decoders
+# gnn - GNN-Based QEC Decoders
 
 Graph neural network decoders for rotated surface code, operating on the detector graph produced by `qec_generator`.
 
@@ -43,23 +43,26 @@ See [Feature engineering](#feature-engineering) below for the full feature speci
 
 The encoder and heads forward passes delegate compute-intensive patterns to `gnn.models.ops`, which dispatches to one of three backends:
 
-| Backend | Description |
-|---------|-------------|
-| `pytorch` | Pure PyTorch reference implementations (default) |
-| `compiled` | `torch.compile`-wrapped PyTorch — same numerics, compiler-driven kernel fusion |
-| `cuda` | Hand-written CUDA kernels |
+| Backend | Description | Autograd | Use case |
+|---------|-------------|----------|----------|
+| `pytorch` | Pure PyTorch reference implementations (default) | ✓ | Training and inference |
+| `compiled` | `torch.compile`-wrapped PyTorch - same numerics, compiler-driven kernel fusion | ✓ | Training and inference (recommended on GPU) |
+| `cuda` | Hand-written CUDA kernels | ✗ | **Inference and benchmarking only** |
+
+> [!WARNING]
+> Do not use `backend: "cuda"` for training. The custom CUDA kernels are forward-only - they do not implement autograd backward passes, so gradients will not propagate through the encoder.
 
 Set via `QECDEC_BACKEND` env var or `set_backend()` at runtime.
 
 ### Heads (`models/heads.py`)
 
-**LogicalHead** — graph-level observable prediction:
+**LogicalHead** - graph-level observable prediction:
 1. Attention-weighted sum pooling over nodes => `(B, H)`
 2. Max pooling over nodes => `(B, H)`
 3. Mean pooling over edge embeddings per graph => `(B, H)`
 4. Concatenate all three => two-layer MLP => `(B, num_observables)` logits
 
-**EdgeHead** — per-edge prediction (used by `edge`):
+**EdgeHead** - per-edge prediction (used by `edge`):
 1. Symmetric node pair: `[h_u + h_v, |h_u − h_v|, edge_h]` => `(E, 3H)`
 2. Two-layer MLP => `(E,)` logits
 
@@ -72,7 +75,7 @@ model = build_model("direct", node_dim=5, edge_dim=3, hidden_dim=128, num_layers
 model = build_model("edge",   node_dim=5, edge_dim=3, hidden_dim=128, num_layers=6)
 ```
 
-`edge` uses `EdgeHead` — it differs from `direct` in loss
+`edge` uses `EdgeHead` - it differs from `direct` in loss
 computation, label format, and evaluation protocol.
 
 ## Decoders (`decoders/`)
@@ -122,7 +125,7 @@ All hyperparameters are set in `configs/train.yaml`.  CLI arguments override con
 
 ```yaml
 case: "direct"
-backend: "compiled"         # "pytorch" | "compiled" | "cuda"
+backend: "compiled"         # "pytorch" | "compiled" (training); "cuda" (inference only)
 compile_mode: "reduce-overhead"
 model:
   hidden_dim: 128
@@ -140,7 +143,7 @@ seed: 42
 
 Programmatic access: `TrainConfig.from_yaml("configs/train.yaml")`.
 
-`train_all_cases.py` uses a lower LR (`1.0e-4`) for the `edge` case via CLI override — the MSE loss landscape is smoother than BCE and converges better at a lower learning rate.
+`train_all_cases.py` uses a lower LR (`1.0e-4`) for the `edge` case via CLI override - the MSE loss landscape is smoother than BCE and converges better at a lower learning rate.
 
 ### Loss functions
 
@@ -290,6 +293,6 @@ Edges touching the boundary node get `inv_dist_sq = 0`.  On typical rotated surf
 | 1.0 | 1 | Temporal neighbour (same spatial position, adjacent round) |
 | 0.25 | 2 | Spatial neighbour (same round, adjacent stabiliser) |
 | 0.0625 | 4 | Distant space-time diagonal |
-| 0.0 | — | Boundary edge |
+| 0.0 | - | Boundary edge |
 
 This provides information orthogonal to `error_prob`: verified on Stim-generated d=5 graphs, there are 45 unique `(error_prob, inv_dist_sq)` combinations.

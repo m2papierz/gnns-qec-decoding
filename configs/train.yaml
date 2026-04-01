@@ -4,7 +4,8 @@
 # Training case: "direct" or "edge"
 case: "direct"
 
-# Compute backend: "pytorch", "compiled", or "cuda"
+# Compute backend: "pytorch" or "compiled" for training.
+# "cuda" is inference-only (custom kernels lack autograd backward).
 backend: "pytorch"
 compile_mode: "reduce-overhead"
 
@@ -15,7 +16,7 @@ output_dir: "./outputs/runs"
 # Model architecture
 model:
   hidden_dim: 128
-  num_layers: 6
+  num_layers: 4
   dropout: 0.1
 
 # Optimisation
