@@ -10,23 +10,20 @@ from deploy.engine import (
     InferenceEngine,
     make_synthetic_batch,
 )
+from gnn.dataset import EDGE_DIM, NODE_DIM
 from gnn.models.heads import build_model
 
 
 def _make_batch(n_graphs=2, n_nodes=10, n_edges=20, device="cpu"):
     graphs = [
         Data(
-            x=torch.randn(n_nodes, 1),
+            x=torch.randn(n_nodes, NODE_DIM),
             edge_index=torch.randint(0, n_nodes, (2, n_edges)),
-            edge_attr=torch.randn(n_edges, 2),
+            edge_attr=torch.randn(n_edges, EDGE_DIM),
         )
         for _ in range(n_graphs)
     ]
     return Batch.from_data_list(graphs).to(device)
-
-
-def _device():
-    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def _trt_available() -> bool:
@@ -71,7 +68,14 @@ class TestPytorchBackend:
     @pytest.mark.parametrize("case", CASES)
     def test_forward_all_cases(self, case: str) -> None:
         """Every training case produces output of correct shape."""
-        model = build_model(case, hidden_dim=16, num_layers=2, dropout=0.0)
+        model = build_model(
+            case,
+            node_dim=NODE_DIM,
+            edge_dim=EDGE_DIM,
+            hidden_dim=16,
+            num_layers=2,
+            dropout=0.0,
+        )
         engine = InferenceEngine(model, backend="pytorch", device="cpu")
 
         batch = _make_batch(n_graphs=3, device="cpu")
@@ -85,7 +89,14 @@ class TestPytorchBackend:
 
     def test_deterministic_eval_mode(self) -> None:
         """Repeated calls produce identical output (no dropout)."""
-        model = build_model("direct", hidden_dim=16, num_layers=2, dropout=0.0)
+        model = build_model(
+            "direct",
+            node_dim=NODE_DIM,
+            edge_dim=EDGE_DIM,
+            hidden_dim=16,
+            num_layers=2,
+            dropout=0.0,
+        )
         engine = InferenceEngine(model, backend="pytorch", device="cpu")
         batch = _make_batch(device="cpu")
 
@@ -95,7 +106,14 @@ class TestPytorchBackend:
 
     def test_benchmark_returns_metrics(self) -> None:
         """Benchmark dict has all expected keys with sane values."""
-        model = build_model("direct", hidden_dim=16, num_layers=2, dropout=0.0)
+        model = build_model(
+            "direct",
+            node_dim=NODE_DIM,
+            edge_dim=EDGE_DIM,
+            hidden_dim=16,
+            num_layers=2,
+            dropout=0.0,
+        )
         engine = InferenceEngine(
             model,
             backend="pytorch",
@@ -122,7 +140,14 @@ class TestCompiledBackend:
     def test_output_matches_pytorch(self) -> None:
         """Compiled backend is numerically identical to PyTorch."""
         torch.manual_seed(42)
-        model = build_model("direct", hidden_dim=32, num_layers=3, dropout=0.0)
+        model = build_model(
+            "direct",
+            node_dim=NODE_DIM,
+            edge_dim=EDGE_DIM,
+            hidden_dim=32,
+            num_layers=3,
+            dropout=0.0,
+        )
         batch = _make_batch(n_graphs=2, device="cuda")
 
         pt_engine = InferenceEngine(model, backend="pytorch", device="cuda")
@@ -135,8 +160,15 @@ class TestCompiledBackend:
 
     @pytest.mark.parametrize("case", CASES)
     def test_all_cases_compile(self, case: str) -> None:
-        """All 4 model architectures survive torch.compile."""
-        model = build_model(case, hidden_dim=16, num_layers=2, dropout=0.0)
+        """All model architectures survive torch.compile."""
+        model = build_model(
+            case,
+            node_dim=NODE_DIM,
+            edge_dim=EDGE_DIM,
+            hidden_dim=16,
+            num_layers=2,
+            dropout=0.0,
+        )
         engine = InferenceEngine(model, backend="compiled", device="cuda")
         batch = _make_batch(device="cuda")
         out = engine.predict(batch)
@@ -151,7 +183,14 @@ class TestTensorRTBackend:
     def test_output_close_to_pytorch(self) -> None:
         """TRT output within FP16 tolerance of PyTorch."""
         torch.manual_seed(42)
-        model = build_model("direct", hidden_dim=32, num_layers=3, dropout=0.0)
+        model = build_model(
+            "direct",
+            node_dim=NODE_DIM,
+            edge_dim=EDGE_DIM,
+            hidden_dim=32,
+            num_layers=3,
+            dropout=0.0,
+        )
         batch = _make_batch(n_graphs=2, device="cuda")
 
         pt_engine = InferenceEngine(model, backend="pytorch", device="cuda")
@@ -171,7 +210,14 @@ class TestTensorRTBackend:
     def test_fp32_precision(self) -> None:
         """TRT with fp32 is tighter than fp16."""
         torch.manual_seed(42)
-        model = build_model("direct", hidden_dim=16, num_layers=2, dropout=0.0)
+        model = build_model(
+            "direct",
+            node_dim=NODE_DIM,
+            edge_dim=EDGE_DIM,
+            hidden_dim=16,
+            num_layers=2,
+            dropout=0.0,
+        )
         batch = _make_batch(n_graphs=2, device="cuda")
 
         pt_engine = InferenceEngine(model, backend="pytorch", device="cuda")
@@ -189,8 +235,15 @@ class TestTensorRTBackend:
 
     @pytest.mark.parametrize("case", CASES)
     def test_all_cases_compile(self, case: str) -> None:
-        """All 4 model architectures survive TRT compilation."""
-        model = build_model(case, hidden_dim=16, num_layers=2, dropout=0.0)
+        """All model architectures survive TRT compilation."""
+        model = build_model(
+            case,
+            node_dim=NODE_DIM,
+            edge_dim=EDGE_DIM,
+            hidden_dim=16,
+            num_layers=2,
+            dropout=0.0,
+        )
         engine = InferenceEngine(
             model,
             backend="tensorrt",
@@ -210,8 +263,8 @@ class TestMakeSyntheticBatch:
             n_edges_per_graph=50,
             device="cpu",
         )
-        assert batch.x.shape == (60, 1)
-        assert batch.edge_attr.shape[1] == 2
+        assert batch.x.shape == (60, NODE_DIM)
+        assert batch.edge_attr.shape[1] == EDGE_DIM
         assert int(batch.batch.max()) + 1 == 3
 
     def test_on_gpu(self) -> None:

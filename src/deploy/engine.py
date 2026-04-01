@@ -359,6 +359,8 @@ def load_model_from_checkpoint(
 
     model = build_model(
         cfg["case"],
+        node_dim=cfg["node_dim"],
+        edge_dim=cfg["edge_dim"],
         hidden_dim=cfg["hidden_dim"],
         num_layers=cfg["num_layers"],
         dropout=dropout,
@@ -367,10 +369,13 @@ def load_model_from_checkpoint(
     model = model.to(device).eval()
 
     logger.info(
-        "Loaded model: case=%s, hidden_dim=%d, num_layers=%d (epoch %d)",
+        "Loaded model: case=%s, hidden_dim=%d, num_layers=%d, "
+        "node_dim=%d, edge_dim=%d (epoch %d)",
         cfg["case"],
         cfg["hidden_dim"],
         cfg["num_layers"],
+        cfg["node_dim"],
+        cfg["edge_dim"],
         ckpt.get("epoch", -1),
     )
     return model, cfg
@@ -383,6 +388,9 @@ def make_synthetic_batch(
     device: str | torch.device = "cuda",
 ) -> Batch:
     """Create a synthetic PyG batch for warmup / benchmarking.
+
+    Generates random tensors matching the enriched feature dimensions
+    (``node_dim=5``, ``edge_dim=3``).
 
     Parameters
     ----------
@@ -399,17 +407,19 @@ def make_synthetic_batch(
     -------
     Batch
     """
+    from gnn.dataset import EDGE_DIM, NODE_DIM
+
     graphs = []
     for _ in range(n_graphs):
         graphs.append(
             Data(
-                x=torch.randn(n_nodes_per_graph, 1),
+                x=torch.randn(n_nodes_per_graph, NODE_DIM),
                 edge_index=torch.randint(
                     0,
                     n_nodes_per_graph,
                     (2, n_edges_per_graph),
                 ),
-                edge_attr=torch.randn(n_edges_per_graph, 2),
+                edge_attr=torch.randn(n_edges_per_graph, EDGE_DIM),
             )
         )
     return Batch.from_data_list(graphs).to(device)
