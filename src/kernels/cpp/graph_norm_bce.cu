@@ -50,11 +50,12 @@ namespace qec {
             const int lane{threadIdx.x & 31};
 
             // Out-of-bounds threads: participate in shuffles but do not write.
+            // Sentinel gid=-1 ensures invalid threads never merge with a valid
+            // segment during the prefix sum or segment-end detection.
             const bool valid{eid < num_edges};
 
-            // Compute per-edge BCE (inactive threads contribute 0).
             float bce{0.0f};
-            int gid{0};
+            int gid{-1};
             if (valid) {
                 bce = stable_bce(logits[eid], target[eid], pos_weight);
                 gid = static_cast<int>(edge_graph[eid]);
