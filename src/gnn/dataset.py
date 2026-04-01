@@ -201,6 +201,7 @@ class MixedSurfaceCodeDataset(Dataset):
         self._split_cache: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
         self._bp_cache: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
         self._static_node_feat_cache: Dict[int, torch.Tensor] = {}
+        self._prior_logit_cache: Dict[int, torch.Tensor] = {}
 
     def __len__(self) -> int:
         return int(self._setting_id.shape[0])
@@ -257,6 +258,22 @@ class MixedSurfaceCodeDataset(Dataset):
         self._static_node_feat_cache[sid] = tensor
         return tensor
 
+    def _get_prior_edge_logit(self, sid: int) -> torch.Tensor:
+        """Return cached prior edge logit ``log(p / (1-p))`` for *sid*.
+
+        Computed from ``edge_attr[:, 0]`` (error probability).  Used
+        by the ``edge`` training case for residual prediction.
+        """
+        if sid in self._prior_logit_cache:
+            return self._prior_logit_cache[sid]
+
+        _, edge_attr = self._get_graph(sid)
+        p = edge_attr[:, 0].clamp(1e-6, 1.0 - 1e-6)
+        prior = torch.log(p / (1.0 - p))
+
+        self._prior_logit_cache[sid] = prior
+        return prior
+
     def _get_split_arrays(self, sid: int) -> Tuple[np.ndarray, np.ndarray]:
         """Return memory-mapped ``(syndrome, logical)`` for *sid*."""
         if sid in self._split_cache:
@@ -308,7 +325,7 @@ class MixedSurfaceCodeDataset(Dataset):
             und_marginals = np.asarray(marginals[shot], dtype=np.float32)
             y = torch.from_numpy(und_marginals[dir_to_undir])
 
-        return Data(
+        data = Data(
             x=x,
             edge_index=edge_index,
             edge_attr=edge_attr,
@@ -316,3 +333,9 @@ class MixedSurfaceCodeDataset(Dataset):
             logical=logical,
             setting_id=torch.tensor(sid, dtype=torch.int64),
         )
+
+        # Attach prior for residual edge prediction.
+        if self.case == "edge":
+            data.prior_edge_logit = self._get_prior_edge_logit(sid)
+
+        return data

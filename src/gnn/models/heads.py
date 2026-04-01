@@ -159,22 +159,30 @@ class QECDecoder(nn.Module):
     """
     Full decoder: encoder backbone + task-specific head.
 
+    For the ``edge`` case the head predicts a *delta* logit which is
+    added to the prior edge logit ``log(p / (1-p))`` from the dataset,
+    so the model only needs to learn the correction to the baseline.
+
     Parameters
     ----------
     encoder : DetectorGraphEncoder
         Shared message-passing backbone.
     head : LogicalHead or EdgeHead
         Task-specific prediction head.
+    case : str
+        Training case (``"direct"`` or ``"edge"``).
     """
 
     def __init__(
         self,
         encoder: DetectorGraphEncoder,
         head: nn.Module,
+        case: Case = "direct",
     ) -> None:
         super().__init__()
         self.encoder = encoder
         self.head = head
+        self.case = case
 
     def forward(self, batch: Batch) -> torch.Tensor:
         """Run full decode pipeline on a batched graph.
@@ -183,16 +191,25 @@ class QECDecoder(nn.Module):
         -------
         Tensor
             - :class:`LogicalHead`: ``(B, num_observables)``
-            - :class:`EdgeHead`: ``(E_total,)``
+            - :class:`EdgeHead`: ``(E_total,)`` final logits
+              (``prior_edge_logit + delta`` for edge case)
         """
         h, edge_h = self.encoder(batch.x, batch.edge_index, batch.edge_attr)
-        return self.head(
+        out = self.head(
             h,
             batch=batch.batch,
             edge_index=batch.edge_index,
             edge_attr=batch.edge_attr,
             edge_h=edge_h,
         )
+
+        # Residual prediction: model outputs delta, add prior baseline.
+        if self.case == "edge":
+            prior = getattr(batch, "prior_edge_logit", None)
+            if prior is not None:
+                out = prior + out
+
+        return out
 
 
 def build_model(
@@ -245,4 +262,4 @@ def build_model(
             f"Unknown case {case!r}. " f"Expected one of: 'direct', 'edge'"
         )
 
-    return QECDecoder(encoder, head)
+    return QECDecoder(encoder, head, case=case)

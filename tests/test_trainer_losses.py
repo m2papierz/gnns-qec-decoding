@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch_geometric.data import Batch, Data
 
-from gnn.trainer import _SoftTeacherLoss
+from gnn.trainer import GraphNormalizedSoftBCELoss
 
 
 def _make_edge_batch(
@@ -36,35 +36,43 @@ def _make_edge_batch(
     return logits, targets, batch
 
 
-class TestSoftTeacherLoss:
-    """Tests for _SoftTeacherLoss."""
+class TestGraphNormalizedSoftBCELoss:
+    """Tests for GraphNormalizedSoftBCELoss."""
 
     def test_output_is_scalar(self) -> None:
         """Loss is a scalar tensor."""
         logits, targets, batch = _make_edge_batch()
-        loss = _SoftTeacherLoss()(logits, targets, batch)
+        loss = GraphNormalizedSoftBCELoss()(logits, targets, batch)
         assert loss.ndim == 0
 
     def test_loss_nonnegative(self) -> None:
-        """MSE-based loss is always >= 0."""
+        """BCE-based loss is always >= 0."""
         logits, targets, batch = _make_edge_batch()
-        loss = _SoftTeacherLoss()(logits, targets, batch)
+        loss = GraphNormalizedSoftBCELoss()(logits, targets, batch)
         assert loss.item() >= 0.0
 
-    def test_perfect_prediction_zero_loss(self) -> None:
-        """When sigmoid(logits) == targets, loss ~ 0."""
+    def test_perfect_prediction_at_entropy_floor(self) -> None:
+        """When sigmoid(logits) == targets, loss equals binary entropy.
+
+        For soft BCE, the minimum achievable loss is the average binary
+        entropy of the targets: ``-t*log(t) - (1-t)*log(1-t)``, not zero.
+        """
         _, targets, batch = _make_edge_batch()
-        # Invert sigmoid to get logits that produce exact targets.
         targets = targets.clamp(1e-6, 1.0 - 1e-6)
         logits = torch.log(targets / (1.0 - targets))
-        loss = _SoftTeacherLoss()(logits, targets, batch)
-        assert loss.item() == pytest.approx(0.0, abs=1e-5)
+        loss = GraphNormalizedSoftBCELoss()(logits, targets, batch)
+
+        # Compute expected binary entropy of targets.
+        entropy = -(
+            targets * torch.log(targets) + (1 - targets) * torch.log(1 - targets)
+        ).mean()
+        assert loss.item() == pytest.approx(entropy.item(), abs=1e-4)
 
     def test_gradient_flows(self) -> None:
         """Logits receive gradients through the loss."""
         logits, targets, batch = _make_edge_batch()
         logits.requires_grad_(True)
-        loss = _SoftTeacherLoss()(logits, targets, batch)
+        loss = GraphNormalizedSoftBCELoss()(logits, targets, batch)
         loss.backward()
         assert logits.grad is not None
         assert not torch.all(logits.grad == 0)
@@ -92,13 +100,14 @@ class TestSoftTeacherLoss:
         logits = torch.zeros(total_edges)  # sigmoid(0) = 0.5
         targets = torch.ones(total_edges)  # target = 1.0
 
-        loss = _SoftTeacherLoss()(logits, targets, batch)
+        loss = GraphNormalizedSoftBCELoss()(logits, targets, batch)
 
-        # Without graph normalization, the big graph would dominate.
-        # With it, each graph's MSE is averaged independently, then
-        # the two averages are averaged. Both graphs have the same
-        # per-edge error (0.25), so the result should be ~ 0.25.
-        assert loss.item() == pytest.approx(0.25, abs=1e-5)
+        # BCE(0, 1) = -log(sigmoid(0)) = log(2) ≈ 0.6931
+        # Both graphs have identical per-edge BCE, graph normalisation
+        # averages within each graph then across, giving the same value.
+        import math
+
+        assert loss.item() == pytest.approx(math.log(2), abs=1e-4)
 
     def test_mixed_size_batch(self) -> None:
         """Works with graphs of varying sizes."""
@@ -115,6 +124,6 @@ class TestSoftTeacherLoss:
         logits = torch.randn(total)
         targets = torch.rand(total)
 
-        loss = _SoftTeacherLoss()(logits, targets, batch)
+        loss = GraphNormalizedSoftBCELoss()(logits, targets, batch)
         assert loss.ndim == 0
         assert loss.item() >= 0.0

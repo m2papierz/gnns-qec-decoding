@@ -356,7 +356,11 @@ class FocalBCEWithLogitsLoss(nn.Module):
         self.alpha = alpha
         self.gamma = gamma
 
-    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+    ) -> torch.Tensor:
         target = target.float()
         bce = torch.nn.functional.binary_cross_entropy_with_logits(
             logits, target, reduction="none"
@@ -368,16 +372,18 @@ class FocalBCEWithLogitsLoss(nn.Module):
         return loss.mean()
 
 
-class _SoftTeacherLoss(nn.Module):
+class GraphNormalizedSoftBCELoss(nn.Module):
     """
-    Graph-normalized MSE between sigmoid(logits) and soft teacher marginals.
+    Graph-normalized soft BCE between logits and soft teacher marginals.
 
-    For each edge, computes ``(sigma(logit) - target)^2``, averages within each
-    graph, then averages across graphs.  This prevents larger graphs from
-    dominating the gradient in mixed-distance batches.
+    For each edge, computes ``BCE_with_logits(logit, target)`` where
+    targets are continuous BP marginals in ``[0, 1]``.  Losses are
+    averaged within each graph, then across graphs, so that larger
+    graphs do not dominate the gradient in mixed-distance batches.
 
-    Used for the ``edge`` training case where targets are continuous BP
-    marginals in ``[0, 1]``.
+    This replaces the previous MSE-on-sigmoid approach, operating
+    directly in logit space for better numerical stability with the
+    residual prior + delta prediction scheme.
     """
 
     def forward(
@@ -386,8 +392,11 @@ class _SoftTeacherLoss(nn.Module):
         target: torch.Tensor,
         batch: Batch,
     ) -> torch.Tensor:
-        pred = torch.sigmoid(logits)
-        per_edge = (pred - target) ** 2
+        per_edge = torch.nn.functional.binary_cross_entropy_with_logits(
+            logits,
+            target,
+            reduction="none",
+        )
 
         edge_graph = batch.batch[batch.edge_index[0]]
         n_graphs = int(batch.batch.max()) + 1
@@ -406,8 +415,8 @@ def _build_criterion(case: Case, cfg: "TrainConfig") -> nn.Module:
             alpha=cfg.focal_alpha,
             gamma=cfg.focal_gamma,
         )
-    # edge case: graph-normalized MSE against BP soft labels
-    return _SoftTeacherLoss()
+    # edge case: graph-normalized soft BCE against BP soft labels
+    return GraphNormalizedSoftBCELoss()
 
 
 class Trainer:

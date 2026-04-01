@@ -300,12 +300,20 @@ class Evaluator:
 
         batch_vec = torch.arange(n, dtype=torch.long).repeat_interleave(num_nodes)
 
-        return Batch(
+        batch_obj = Batch(
             x=x,
             edge_index=ei_batch,
             edge_attr=ea_batch,
             batch=batch_vec,
         )
+
+        # Attach prior edge logit for residual edge prediction.
+        if self.case == "edge":
+            p = edge_attr[:, 0].clamp(1e-6, 1.0 - 1e-6)
+            prior_single = torch.log(p / (1.0 - p))  # (E,)
+            batch_obj.prior_edge_logit = prior_single.repeat(n)  # (n*E,)
+
+        return batch_obj
 
     @torch.no_grad()
     def _eval_direct(
