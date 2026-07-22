@@ -1,4 +1,4 @@
-# gnns-qec-decoding
+# gnn-surface-code-decoding
 
 An end-to-end project on decoding topological quantum error-correcting codes with Graph Neural Networks (GNNs).
 
@@ -77,7 +77,7 @@ uv run scripts/data_generation.py --mode raw-only
 uv run scripts/data_generation.py --cases direct edge -v
 ```
 
-See [`src/qec_generator/README.md`](src/qec_generator/README.md) for
+See [`src/sampling/README.md`](src/sampling/README.md) for
 configuration reference, output structure, and Python API.
 
 ## MWPM baseline evaluation
@@ -122,7 +122,7 @@ uv run scripts/eval_gnn.py --checkpoint outputs/runs/edge/best.pt \
     --decoder bp_osd --baseline outputs/results/bp_osd_baseline.json
 ```
 
-See [`src/gnn/README.md`](src/gnn/README.md) for architecture details,
+See [`src/model/README.md`](src/model/README.md) for architecture details,
 hyperparameters, training modes, and evaluation protocols.
 
 ## Deployment and benchmarking
@@ -137,22 +137,22 @@ Then benchmark inference across backends:
 
 ```bash
 # All backends (requires torch-tensorrt for TRT)
-uv run src/deploy/export_trt.py --checkpoint outputs/runs/direct/best.pt
+uv run scripts/export_trt.py --checkpoint outputs/runs/direct/best.pt
 
 # PyTorch and compiled only
-uv run src/deploy/export_trt.py --checkpoint outputs/runs/direct/best.pt \
+uv run scripts/export_trt.py --checkpoint outputs/runs/direct/best.pt \
     --backends pytorch compiled
 
 # Custom batch size
-uv run src/deploy/export_trt.py --checkpoint outputs/runs/edge/best.pt \
+uv run scripts/export_trt.py --checkpoint outputs/runs/edge/best.pt \
     --n-graphs 8 --n-iters 200
 ```
 
 The TensorRT backend uses `torch.compile` with the `torch_tensorrt` backend, which automatically partitions the GNN: dense subgraphs (MLP, Linear, LayerNorm) are lowered to TRT engines, while sparse ops (scatter, gather) remain in PyTorch.
 
-See [`src/deploy/README.md`](src/deploy/README.md) for Python API, benchmark output format, and details on TRT graph partitioning.
+See [`docs/deployment.md`](docs/deployment.md) for Python API, benchmark output format, and details on TRT graph partitioning.
 
-See [`src/kernels/README.md`](src/kernels/README.md) for custom CUDA kernels used with the `cuda` compute backend (inference only).
+See [`src/kernels/README.md`](src/kernels/README.md) for custom CUDA kernels (inference only).
 
 ## Benchmarks and plots
 
@@ -169,4 +169,4 @@ uv run scripts/plot_results.py -v
 uv run scripts/plot_results.py --no-benchmark -v
 ```
 
-See [`src/benchmarks/README.md`](src/benchmarks/README.md) for report format, plot descriptions, and the full pipeline from training to figures.
+See [`src/benchmarks/README.md`](src/benchmarks/README.md) for report format and plot descriptions.
