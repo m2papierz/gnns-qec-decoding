@@ -18,7 +18,8 @@ import json
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
@@ -26,7 +27,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-def _load_json(path: Path) -> Dict[str, Any]:
+def _load_json(path: Path) -> dict[str, Any]:
     if not path.is_file():
         logger.warning("File not found: %s", path)
         return {}
@@ -42,8 +43,8 @@ def load_eval_results(
         "gnn_edge_mwpm.json",
         "gnn_edge_bp_osd.json",
     ),
-) -> Dict[str, List[Dict[str, Any]]]:
-    all_results: Dict[str, List[Dict[str, Any]]] = {}
+) -> dict[str, list[dict[str, Any]]]:
+    all_results: dict[str, list[dict[str, Any]]] = {}
     for fname in filenames:
         data = _load_json(results_dir / fname)
         if not data:
@@ -66,18 +67,18 @@ def _label_from_filename(fname: str) -> str:
     }.get(fname, fname.removesuffix(".json"))
 
 
-def load_benchmark_results(path: Path) -> Dict[str, Any]:
+def load_benchmark_results(path: Path) -> dict[str, Any]:
     return _load_json(path)
 
 
 def _aggregate_over_rounds(
-    results: List[Dict],
-) -> Dict[tuple[int, float], tuple[float, int, int]]:
+    results: list[dict],
+) -> dict[tuple[int, float], tuple[float, int, int]]:
     """Average LER over rounds for each (distance, error_prob).
 
     Returns {(d, p): (mean_ler, total_errors, total_shots)}.
     """
-    bucket: Dict[tuple[int, float], tuple[int, int]] = defaultdict(lambda: (0, 0))
+    bucket: dict[tuple[int, float], tuple[int, int]] = defaultdict(lambda: (0, 0))
     for r in results:
         key = (r["distance"], r["error_prob"])
         errs, shots = bucket[key]
@@ -86,7 +87,7 @@ def _aggregate_over_rounds(
     return {k: (e / s if s > 0 else 0.0, e, s) for k, (e, s) in bucket.items()}
 
 
-_STYLES: Dict[str, Dict[str, Any]] = {
+_STYLES: dict[str, dict[str, Any]] = {
     "MWPM": {"color": "#1f77b4", "marker": "o", "ls": "-", "zorder": 5},
     "BP+OSD": {"color": "#ff7f0e", "marker": "s", "ls": "--", "zorder": 4},
     "GNN direct": {"color": "#2ca02c", "marker": "^", "ls": "-", "zorder": 3},
@@ -94,7 +95,7 @@ _STYLES: Dict[str, Dict[str, Any]] = {
     "GNN>BP+OSD": {"color": "#9467bd", "marker": "v", "ls": "-", "zorder": 3},
 }
 
-_BACKEND_STYLES: Dict[str, Dict[str, Any]] = {
+_BACKEND_STYLES: dict[str, dict[str, Any]] = {
     "pytorch": {"color": "#1f77b4", "marker": "o", "ls": "-"},
     "compiled": {"color": "#ff7f0e", "marker": "s", "ls": "--"},
     "cuda": {"color": "#2ca02c", "marker": "^", "ls": "-."},
@@ -102,12 +103,12 @@ _BACKEND_STYLES: Dict[str, Dict[str, Any]] = {
 }
 
 
-def _sty(label: str) -> Dict[str, Any]:
+def _sty(label: str) -> dict[str, Any]:
     return _STYLES.get(label, {"color": "gray", "marker": "x", "ls": "-", "zorder": 1})
 
 
 def plot_ler_vs_p(
-    eval_results: Dict[str, List[Dict]],
+    eval_results: dict[str, list[dict]],
     output_dir: Path,
 ) -> None:
     """LER vs physical error probability, one subplot per distance.
@@ -176,7 +177,7 @@ def plot_ler_vs_p(
 
 
 def plot_ler_scaling_with_d(
-    eval_results: Dict[str, List[Dict]],
+    eval_results: dict[str, list[dict]],
     output_dir: Path,
     *,
     reference_p: float | None = None,
@@ -233,8 +234,8 @@ def plot_ler_scaling_with_d(
 
 
 def plot_ler_vs_latency(
-    eval_results: Dict[str, List[Dict]],
-    benchmark_data: Dict[str, Any],
+    eval_results: dict[str, list[dict]],
+    benchmark_data: dict[str, Any],
     output_dir: Path,
     *,
     batch_size: int = 64,
@@ -249,7 +250,7 @@ def plot_ler_vs_latency(
         return
 
     # (case, backend) > mean_ms at target batch_size
-    latency_map: Dict[tuple[str, str], float] = {}
+    latency_map: dict[tuple[str, str], float] = {}
     for br in bench_results:
         if br["batch_size"] == batch_size:
             latency_map[(br["case"], br["backend"])] = br["mean_ms"]
@@ -307,7 +308,7 @@ def plot_ler_vs_latency(
 
 
 def plot_throughput_vs_batch(
-    benchmark_data: Dict[str, Any],
+    benchmark_data: dict[str, Any],
     output_dir: Path,
 ) -> None:
     """Throughput vs batch size -- one subplot per case."""
@@ -369,7 +370,7 @@ def plot_throughput_vs_batch(
 
 
 def plot_speedup_bar(
-    benchmark_data: Dict[str, Any],
+    benchmark_data: dict[str, Any],
     output_dir: Path,
     *,
     reference_backend: str = "pytorch",
@@ -394,7 +395,7 @@ def plot_speedup_bar(
     batch_sizes = sorted({br["batch_size"] for br in bench_results})
 
     # Reference latencies: {(case, batch_size): mean_ms}
-    ref_map: Dict[tuple[str, int], float] = {}
+    ref_map: dict[tuple[str, int], float] = {}
     for br in bench_results:
         if br["backend"] == reference_backend:
             ref_map[(br["case"], br["batch_size"])] = br["mean_ms"]
@@ -500,7 +501,7 @@ def generate_all_plots(
     plot_ler_vs_p(eval_data, output_dir)
     plot_ler_scaling_with_d(eval_data, output_dir, reference_p=reference_p)
 
-    bench_data: Dict[str, Any] = {}
+    bench_data: dict[str, Any] = {}
     if benchmark_path is not None:
         bench_data = load_benchmark_results(benchmark_path)
 

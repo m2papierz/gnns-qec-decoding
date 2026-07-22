@@ -26,13 +26,13 @@ import os
 import time
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import torch
 from torch_geometric.data import Batch, Data
 
-from gnn.models.heads import QECDecoder, build_model
+from gnn.models.decoder import QECDecoder, build_model
 
 
 logger = logging.getLogger(__name__)
@@ -247,7 +247,7 @@ class InferenceEngine:
         self,
         batch: Batch,
         n_iters: int = 100,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Timed inference benchmark using CUDA events.
 
         Automatically warms up on first call.
@@ -335,7 +335,7 @@ def load_model_from_checkpoint(
     *,
     device: str | torch.device = "cuda",
     dropout: float = 0.0,
-) -> tuple[QECDecoder, Dict[str, Any]]:
+) -> tuple[QECDecoder, dict[str, Any]]:
     """Load a trained QECDecoder from a training checkpoint.
 
     Parameters
@@ -358,7 +358,6 @@ def load_model_from_checkpoint(
     cfg = ckpt["config"]
 
     model = build_model(
-        cfg["case"],
         node_dim=cfg["node_dim"],
         edge_dim=cfg["edge_dim"],
         hidden_dim=cfg["hidden_dim"],
@@ -369,9 +368,8 @@ def load_model_from_checkpoint(
     model = model.to(device).eval()
 
     logger.info(
-        "Loaded model: case=%s, hidden_dim=%d, num_layers=%d, "
+        "Loaded model: hidden_dim=%d, num_layers=%d, "
         "node_dim=%d, edge_dim=%d (epoch %d)",
-        cfg["case"],
         cfg["hidden_dim"],
         cfg["num_layers"],
         cfg["node_dim"],

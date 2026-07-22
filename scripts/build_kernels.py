@@ -5,14 +5,12 @@ Usage (from project root):
 """
 
 import os
-import sys
 from pathlib import Path
 
 
 # Ensure we run from project root regardless of cwd
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 os.chdir(PROJECT_ROOT)
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension

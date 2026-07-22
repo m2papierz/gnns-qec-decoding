@@ -21,11 +21,11 @@ import logging
 import platform
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import torch
 
-from constants import CASES
 from deploy.engine import (
     InferenceEngine,
     load_model_from_checkpoint,
@@ -53,8 +53,8 @@ _BACKEND_MAP: dict[str, tuple[str, str]] = {
 class BenchmarkReport:
     """Full benchmark report with hardware metadata."""
 
-    hardware: Dict[str, Any] = field(default_factory=dict)
-    results: List[Dict[str, Any]] = field(default_factory=list)
+    hardware: dict[str, Any] = field(default_factory=dict)
+    results: list[dict[str, Any]] = field(default_factory=list)
 
     def save(self, path: Path) -> None:
         """Write report to JSON."""
@@ -69,9 +69,9 @@ class BenchmarkReport:
         logger.info("Benchmark report saved to %s", path)
 
 
-def _collect_hardware_info() -> Dict[str, Any]:
+def _collect_hardware_info() -> dict[str, Any]:
     """Gather hardware and software metadata."""
-    info: Dict[str, Any] = {
+    info: dict[str, Any] = {
         "platform": platform.platform(),
         "python": platform.python_version(),
         "torch": torch.__version__,
@@ -86,7 +86,7 @@ def _collect_hardware_info() -> Dict[str, Any]:
     return info
 
 
-def detect_available_backends() -> List[str]:
+def detect_available_backends() -> list[str]:
     """Return list of backends that are actually usable.
 
     Always includes ``pytorch``.  Adds ``compiled`` if CUDA is available.
@@ -111,16 +111,15 @@ def detect_available_backends() -> List[str]:
     return available
 
 
-def discover_checkpoints(runs_dir: Path) -> Dict[str, Path]:
-    """Find best.pt checkpoints under runs_dir/{case}/."""
-    found: Dict[str, Path] = {}
-    for case in CASES:
-        ckpt = runs_dir / case / "best.pt"
-        if ckpt.is_file():
-            found[case] = ckpt
-            logger.info("Found checkpoint: %s", ckpt)
-        else:
-            logger.warning("No checkpoint for case '%s' at %s", case, ckpt)
+def discover_checkpoints(runs_dir: Path) -> dict[str, Path]:
+    """Find best.pt checkpoints under runs_dir/direct/."""
+    found: dict[str, Path] = {}
+    ckpt = runs_dir / "direct" / "best.pt"
+    if ckpt.is_file():
+        found["direct"] = ckpt
+        logger.info("Found checkpoint: %s", ckpt)
+    else:
+        logger.warning("No checkpoint at %s", ckpt)
     return found
 
 
@@ -139,7 +138,7 @@ def benchmark_checkpoint(
     n_iters: int = 100,
     warmup_iters: int = 10,
     device: str = "cuda",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Benchmark a single checkpoint across backends and batch sizes.
 
     For each backend, reloads the model fresh with the correct ops
@@ -147,7 +146,7 @@ def benchmark_checkpoint(
     """
     from gnn.models.ops import set_backend
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
 
     for backend in backends:
         if backend not in _BACKEND_MAP:
@@ -159,10 +158,9 @@ def benchmark_checkpoint(
         # Reload model with the right ops backend active.
         set_backend(ops_backend)
         model, cfg = load_model_from_checkpoint(checkpoint, device=device)
-        case = cfg["case"]
 
         for bs in batch_sizes:
-            label = f"{case}/{backend}/bs={bs}"
+            label = f"direct/{backend}/bs={bs}"
             logger.info("Benchmarking %s ...", label)
 
             batch = make_synthetic_batch(
@@ -187,7 +185,7 @@ def benchmark_checkpoint(
 
                 result = {
                     "checkpoint": str(checkpoint),
-                    "case": case,
+                    "case": "direct",
                     "backend": backend,
                     "batch_size": bs,
                     "n_iters": n_iters,
