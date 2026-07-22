@@ -31,12 +31,12 @@ import torch
 from torch_geometric.data import Batch, Data
 
 from evaluation.stats import wilson_interval
-from gnn.models.decoder import build_model
-from qec_generator.graph import (
+from model.decoder import build_model
+from sampling.graph import (
     build_fired_detector_graph,
     extract_circuit_metadata,
 )
-from qec_generator.sampler import settings_from_circuit_dir
+from sampling.sampler import settings_from_circuit_dir
 
 logger = logging.getLogger(__name__)
 

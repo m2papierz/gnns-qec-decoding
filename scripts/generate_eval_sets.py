@@ -24,8 +24,8 @@ import numpy as np
 import pymatching
 import stim
 
-from qec_generator.sampler import settings_from_circuit_dir
-from qec_generator.utils import stable_seed
+from sampling.sampler import settings_from_circuit_dir
+from sampling.seeding import stable_seed
 
 
 logger = logging.getLogger(__name__)

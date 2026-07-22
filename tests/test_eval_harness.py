@@ -25,8 +25,8 @@ from evaluation.evaluator import (
     load_eval_set,
 )
 from evaluation.stats import EvalOutcome, WilsonInterval
-from gnn.models.decoder import build_model
-from qec_generator.graph import CircuitMetadata
+from model.decoder import build_model
+from sampling.graph import CircuitMetadata
 
 
 CI_SHARD_DIR = Path(__file__).resolve().parent.parent / "data" / "ci_shard"

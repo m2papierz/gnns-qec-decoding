@@ -8,7 +8,7 @@ import pytest
 import stim
 import torch
 
-from gnn.trainer import Trainer, TrainConfig
+from model.trainer import Trainer, TrainConfig
 
 
 @pytest.fixture()

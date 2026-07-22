@@ -9,7 +9,7 @@ The project has three compute backends:
 - ``compiled`` — PyTorch ops + ``torch.compile`` model wrapper
 - ``cuda`` — hand-written CUDA kernels (requires ``build_kernels.py``)
 
-The ``cuda`` backend operates at the ops level (``gnn.models.ops``),
+The ``cuda`` backend operates at the ops level (``model.ops``),
 not at the ``torch.compile`` level.  This module sets the correct ops
 backend before loading the model for each benchmark.
 """
@@ -26,7 +26,7 @@ from typing import Any
 
 import torch
 
-from deploy.engine import (
+from inference import (
     InferenceEngine,
     load_model_from_checkpoint,
     make_synthetic_batch,
@@ -40,8 +40,8 @@ _DEFAULT_NODES: int = 66
 _DEFAULT_EDGES: int = 192
 
 # Maps project backend name => (ops_backend, engine_backend).
-# ops_backend is passed to gnn.models.ops.set_backend().
-# engine_backend is passed to deploy.engine.InferenceEngine.
+# ops_backend is passed to model.ops.set_backend().
+# engine_backend is passed to inference.InferenceEngine.
 _BACKEND_MAP: dict[str, tuple[str, str]] = {
     "pytorch": ("pytorch", "pytorch"),
     "compiled": ("compiled", "compiled"),
@@ -144,7 +144,7 @@ def benchmark_checkpoint(
     For each backend, reloads the model fresh with the correct ops
     backend to avoid stale compiled caches.
     """
-    from gnn.models.ops import set_backend
+    from model.ops import set_backend
 
     results: list[dict[str, Any]] = []
 

@@ -17,7 +17,7 @@ import torch
 from numpy.typing import NDArray
 from torch_geometric.data import Batch, Data
 
-from qec_generator.graph import (
+from sampling.graph import (
     CircuitMetadata,
     build_fired_detector_graph,
     extract_circuit_metadata,
@@ -231,7 +231,7 @@ class GNNDecoder:
         -------
         GNNDecoder
         """
-        from gnn.models.decoder import build_model
+        from model.decoder import build_model
 
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch_geometric.data import Batch, Data
 
-from gnn.models.decoder import (
+from model.decoder import (
     LogicalHead,
     QECDecoder,
     build_model,

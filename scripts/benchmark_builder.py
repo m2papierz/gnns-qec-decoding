@@ -24,7 +24,7 @@ from typing import Sequence
 import numpy as np
 import stim
 
-from qec_generator.graph import (
+from sampling.graph import (
     CircuitMetadata,
     build_fired_detector_graph,
     extract_circuit_metadata,
@@ -168,8 +168,8 @@ def _measure_gpu_rate() -> float | None:
         import torch
         from torch_geometric.data import Batch, Data
 
-        from gnn.models.encoder import DetectorGraphEncoder
-        from gnn.models.decoder import LogicalHead
+        from model.encoder import DetectorGraphEncoder
+        from model.decoder import LogicalHead
     except ImportError:
         logger.warning("PyTorch/PyG not available; cannot measure GPU rate")
         return None

@@ -15,9 +15,9 @@ import pytest
 import torch
 from torch_geometric.data import Batch, Data
 
-from gnn.models.decoder import QECDecoder, build_model
-from gnn.trainer import FocalBCEWithLogitsLoss
-from qec_generator.graph import (
+from model.decoder import QECDecoder, build_model
+from model.trainer import FocalBCEWithLogitsLoss
+from sampling.graph import (
     EDGE_DIM,
     NODE_DIM,
     CircuitMetadata,

@@ -98,7 +98,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> None:
     import torch
 
-    from deploy.engine import (
+    from inference import (
         InferenceEngine,
         load_model_from_checkpoint,
         make_synthetic_batch,

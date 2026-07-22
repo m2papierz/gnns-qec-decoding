@@ -4,7 +4,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from gnn.models.ops import (
+from model.ops import (
     Backend,
     fused_norm_residual_dropout,
     get_backend,

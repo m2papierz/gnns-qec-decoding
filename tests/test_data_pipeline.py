@@ -7,8 +7,8 @@ import pytest
 import stim
 import torch
 
-from gnn.dataset import StreamingSurfaceCodeDataset
-from qec_generator.graph import (
+from model.dataset import StreamingSurfaceCodeDataset
+from sampling.graph import (
     EDGE_DIM,
     NODE_DIM,
     CircuitMetadata,
@@ -16,7 +16,7 @@ from qec_generator.graph import (
     build_fired_detector_graph,
     extract_circuit_metadata,
 )
-from qec_generator.sampler import (
+from sampling.sampler import (
     CircuitSetting,
     WorkerSampler,
     settings_from_circuit_dir,

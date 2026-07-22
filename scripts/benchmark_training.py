@@ -33,9 +33,9 @@ import torch.nn as nn
 from torch.optim import AdamW
 from torch_geometric.data import Batch, Data
 
-from gnn.models.decoder import build_model
-from gnn.trainer import FocalBCEWithLogitsLoss
-from qec_generator.graph import build_fired_detector_graph, extract_circuit_metadata
+from model.decoder import build_model
+from model.trainer import FocalBCEWithLogitsLoss
+from sampling.graph import build_fired_detector_graph, extract_circuit_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +117,7 @@ def _build_batches_from_ci_shard(
     observables = np.load(CI_SHARD_DIR / "observables.npy").astype(np.float32)
     coords = np.load(CI_SHARD_DIR / "detector_coords.npy")
 
-    from qec_generator.graph import CircuitMetadata
+    from sampling.graph import CircuitMetadata
 
     meta = CircuitMetadata(
         detector_coords=coords,

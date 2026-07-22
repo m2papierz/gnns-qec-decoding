@@ -1,4 +1,4 @@
-"""CUDA kernel wrappers matching gnn.models.ops signatures."""
+"""CUDA kernel wrappers matching model.ops signatures."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def symmetric_edge_features(
     """CUDA fused symmetric edge features."""
     if x.is_cuda and x.is_contiguous() and edge_h.is_contiguous():
         return _cuda_sym_edge_feat(x, edge_index, edge_h)
-    from gnn.models.ops import symmetric_edge_features as _pt
+    from model.ops import symmetric_edge_features as _pt
 
     return _pt(x, edge_index, edge_h)
 
@@ -39,7 +39,7 @@ def fused_norm_residual_dropout(
     norm.weight.data = gamma
     norm.bias.data = beta
     drop = nn.Dropout(dropout_p)
-    from gnn.models.ops import fused_norm_residual_dropout as _pt
+    from model.ops import fused_norm_residual_dropout as _pt
 
     return _pt(x, residual, norm, drop, training)
 
@@ -54,6 +54,6 @@ def graph_normalized_bce(
     """CUDA per-graph normalized BCE."""
     if logits.is_cuda and logits.is_contiguous():
         return _cuda_graph_bce(logits, target, edge_graph, n_graphs, pos_weight)
-    from gnn.models.ops import graph_normalized_bce as _pt
+    from model.ops import graph_normalized_bce as _pt
 
     return _pt(logits, target, edge_graph, n_graphs, pos_weight)

@@ -1,16 +1,16 @@
-"""Tests for deploy.engine — inference engine and helpers."""
+"""Tests for inference — inference engine and helpers."""
 
 import pytest
 import torch
 from torch_geometric.data import Batch, Data
 
-from deploy.engine import (
+from inference import (
     InferenceBackend,
     InferenceEngine,
     make_synthetic_batch,
 )
-from gnn.dataset import EDGE_DIM, NODE_DIM
-from gnn.models.decoder import build_model
+from model.dataset import EDGE_DIM, NODE_DIM
+from model.decoder import build_model
 
 
 def _make_batch(n_graphs=2, n_nodes=10, n_edges=20, device="cpu"):
@@ -29,7 +29,7 @@ def _trt_available() -> bool:
     if not torch.cuda.is_available():
         return False
     try:
-        from deploy.engine import _setup_tensorrt_libs
+        from inference import _setup_tensorrt_libs
 
         _setup_tensorrt_libs()
         import torch_tensorrt  # noqa: F401

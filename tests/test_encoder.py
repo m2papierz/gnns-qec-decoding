@@ -4,8 +4,8 @@ import pytest
 import torch
 from torch_geometric.data import Batch, Data
 
-from gnn.models.encoder import DetectorGraphEncoder
-from qec_generator.graph import EDGE_DIM, NODE_DIM
+from model.encoder import DetectorGraphEncoder
+from sampling.graph import EDGE_DIM, NODE_DIM
 
 
 @pytest.fixture

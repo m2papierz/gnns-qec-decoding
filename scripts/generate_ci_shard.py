@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import stim
 
-from qec_generator.graph import extract_circuit_metadata
+from sampling.graph import extract_circuit_metadata
 
 CIRCUIT_PATH = Path("data/circuits/d3_r3_p0_01.stim")
 OUTPUT_DIR = Path("data/ci_shard")

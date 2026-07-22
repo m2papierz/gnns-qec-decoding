@@ -30,8 +30,8 @@ import torch
 from torch_geometric.data import Batch, Data
 
 from evaluation.calibration import expected_calibration_error, reliability_diagram
-from gnn.models.decoder import build_model
-from qec_generator.graph import (
+from model.decoder import build_model
+from sampling.graph import (
     build_fired_detector_graph,
     extract_circuit_metadata,
 )
