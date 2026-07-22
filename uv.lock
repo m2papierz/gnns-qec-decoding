@@ -765,7 +765,7 @@ wheels = [
 ]
 
 [[package]]
-name = "gnns-qec-decoding"
+name = "gnn-surface-code-decoding"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

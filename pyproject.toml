@@ -1,7 +1,7 @@
 [project]
-name = "gnns-qec-decoding"
+name = "gnn-surface-code-decoding"
 version = "0.1.0"
-description = "Decoding topological codes with GNNs"
+description = "GNN decoders for surface code quantum error correction"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
