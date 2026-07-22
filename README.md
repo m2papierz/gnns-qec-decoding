@@ -1,172 +1,90 @@
 # gnn-surface-code-decoding
 
-An end-to-end project on decoding topological quantum error-correcting codes with Graph Neural Networks (GNNs).
+End-to-end pipeline for decoding surface codes with graph neural networks: Stim circuit sampling, detector graph construction, GNN training with on-the-fly data generation, multi-backend inference (PyTorch, compiled, TensorRT), statistically rigorous evaluation against classical baselines (MWPM, BP+OSD), and performance benchmarking.
 
 > [!IMPORTANT]
-> **Learning project** - built to deepen hands-on understanding of GNN-based QEC decoding, detector graph construction, and the interplay between classical decoders (MWPM, BP+OSD) and learned models. Simplifications and approximations often appear in the design; this is not a production decoder.
+> **Learning project** — built to deepen hands-on understanding of GNN-based QEC decoding, detector graph construction, and the interplay between classical decoders and learned models. Not a production decoder.
 
-## Background
+## Setup
 
-Physical qubits are fragile, environmental noise introduces random bit-flip, phase-flip, and depolarisation errors. Quantum error correction (QEC) protects a **logical qubit** by encoding it across many physical qubits arranged on a lattice and periodically measuring parity checks called **stabilisers**.
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
-**Surface code** is the leading QEC scheme. Physical qubits sit on a 2-D grid; stabiliser measurements produce a binary **syndrome** that reveals *where* errors likely occurred without collapsing the encoded quantum state. Three parameters govern the setup:
-
-| Parameter | Meaning |
-|-----------|---------|
-| distance `d` | Grid size (d×d). More redundancy => better protection, but more qubits. |
-| rounds `r` | How many times stabilisers are measured. Measurements themselves are noisy, so repetition helps. |
-| error prob `p` | Physical error rate per operation. |
-
-A **decoder** takes the syndrome and infers whether the logical qubit has been corrupted (an **observable flip**). The fraction of shots where the decoder is wrong is the **logical error rate (LER)** - the single metric that matters.
-
-### Error-correction threshold
-
-Below a critical physical error rate (the **threshold**, ~0.5–1 % for circuit-level depolarising noise), increasing `d` exponentially suppresses LER. Above threshold, larger codes perform *worse* because more qubits mean more uncorrectable errors.
-
-### From syndromes to graphs
-
-Stim's detector error model (DEM) describes which physical faults trigger which detectors and which flip the logical observable. This maps naturally to a **graph**: nodes are detectors, edges connect detectors that a single fault can trigger simultaneously, and edge weights encode the fault likelihood. This graph is the input to both classical decoders and our GNN.
-
-### Decoding approaches
-
-**MWPM (Minimum-Weight Perfect Matching)** is the standard classical decoder. It pairs up triggered detectors (or pairs them with the boundary) to find the lowest-weight explanation of the syndrome, then reads off whether the logical observable flipped. PyMatching implements this efficiently.
-
-**GNN decoders** operate on the same detector graph but can learn richer error structure. This project explores two training modes:
-
-| Mode | What the GNN predicts | Why |
-|------|----------------------|-----|
-| `direct` | Observable flip directly from the graph + syndrome | Simplest end-to-end approach |
-| `edge` | Per-edge error probabilities fed into a downstream decoder | Can outperform MWPM by learning a better noise model |
-
-The `edge` model is trained against BP marginals (soft labels from belief propagation). At evaluation time, its per-edge probabilities can be fed into either **MWPM** (PyMatching) or **BP+OSD** (NVIDIA CUDA-Q) for decoding.
-
-## Developer setup
-
-Quick start:
-1. Install `uv` (if you don't have it):
-   ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   ```
-2. Synchronize the environment:
-   ```bash
-   uv sync
-   ```
-3. Run tests:
-   ```bash
-   uv run pytest
-   ```
-
-Code formatting/linting:
 ```bash
-uv run isort .
-uv run black .
+uv sync
+uv run pytest            # verify installation
 ```
 
 ## Dataset generation
 
-Generate surface code datasets for GNN-based QEC decoders:
+Generate Stim circuits and frozen evaluation sets for GNN training and evaluation:
 
 ```bash
-# Full pipeline (raw + datasets)
-uv run scripts/data_generation.py -c configs/data_generation.yaml
-
-# Raw data only
-uv run scripts/data_generation.py --mode raw-only
-
-# Specific cases with verbose logging
-uv run scripts/data_generation.py --cases direct edge -v
+uv run scripts/generate_circuits.py          # circuits for d∈{3,5,7}, p∈{0.003..0.01}
+uv run scripts/generate_eval_sets.py         # frozen eval sets with adaptive sampling
+uv run scripts/generate_ci_shard.py          # small CI shard for test suite
 ```
 
-See [`src/sampling/README.md`](src/sampling/README.md) for
-configuration reference, output structure, and Python API.
+See [`docs/sampling.md`](docs/sampling.md) for graph construction, circuit metadata, and the sampling API.
 
-## MWPM baseline evaluation
+## GNN training
 
-Before training any GNN, establish reference LER curves with the classical MWPM decoder:
-
-```bash
-# Evaluate on test split (default)
-uv run scripts/eval_mwpm.py -c configs/data_generation.yaml
-
-# Multiple splits + JSON export
-uv run scripts/eval_mwpm.py --splits test val -o outputs/results/mwpm_baseline.json
-
-# Rebuild circuits from config (if .stim files are missing)
-uv run scripts/eval_mwpm.py --regenerate
-```
-
-The script reports a per-setting LER table, summary statistics by distance, an estimated error-correction threshold, and automatic sanity checks (LER monotonicity in `p`, scaling with `d` below threshold).
-
-## GNN training and evaluation
-
-Train a GNN decoder and evaluate against the MWPM baseline:
+Train a GNN decoder using sample-budget training with on-the-fly Stim sampling:
 
 ```bash
-# Train (start with direct)
 uv run scripts/train_gnn.py -c configs/train.yaml
 
-# Override case or backend
-uv run scripts/train_gnn.py -c configs/train.yaml --case edge
-uv run scripts/train_gnn.py -c configs/train.yaml --backend compiled
-
-# Evaluate direct model with MWPM comparison
-uv run scripts/eval_gnn.py --checkpoint outputs/runs/direct/best.pt \
-    --baseline outputs/results/mwpm_baseline.json
-
-# Evaluate edge model - GNN weights fed into MWPM
-uv run scripts/eval_gnn.py --checkpoint outputs/runs/edge/best.pt \
-    --decoder mwpm --baseline outputs/results/mwpm_baseline.json
-
-# Evaluate edge model - GNN weights fed into BP+OSD (CUDA-Q)
-uv run scripts/eval_gnn.py --checkpoint outputs/runs/edge/best.pt \
-    --decoder bp_osd --baseline outputs/results/bp_osd_baseline.json
+# Per-distance configs with tuned budgets
+uv run scripts/train_gnn.py -c configs/train_d3.yaml
+uv run scripts/train_gnn.py -c configs/train_d5.yaml
+uv run scripts/train_gnn.py -c configs/train_d7.yaml
 ```
 
-See [`src/model/README.md`](src/model/README.md) for architecture details,
-hyperparameters, training modes, and evaluation protocols.
+See [`docs/model.md`](docs/model.md) for architecture details (GINE encoder, LogicalHead, pooling), hyperparameters, and training configuration.
+
+## Evaluation
+
+Evaluate the GNN against classical baselines (MWPM, BP+OSD) on frozen eval sets with adaptive stopping and paired statistical tests:
+
+```bash
+# Full eval harness: GNN vs MWPM vs BP+OSD on frozen sets
+uv run scripts/eval_harness.py --checkpoint outputs/runs/direct/best.pt
+
+# Quick sanity check on fresh samples
+uv run scripts/eval_sanity.py --checkpoint outputs/runs/direct/best.pt
+```
+
+See [`docs/eval_protocol.md`](docs/eval_protocol.md) for the pre-registered stopping rule, McNemar test, and Wilson confidence intervals.
 
 ## Deployment and benchmarking
 
-Train all cases:
+Benchmark inference across backends and export to TensorRT:
 
 ```bash
-uv run scripts/train_all_cases.py -v
-```
-
-Then benchmark inference across backends:
-
-```bash
-# All backends (requires torch-tensorrt for TRT)
+uv run scripts/benchmark_all.py -v           # inference latency/throughput/memory
 uv run scripts/export_trt.py --checkpoint outputs/runs/direct/best.pt
-
-# PyTorch and compiled only
-uv run scripts/export_trt.py --checkpoint outputs/runs/direct/best.pt \
-    --backends pytorch compiled
-
-# Custom batch size
-uv run scripts/export_trt.py --checkpoint outputs/runs/edge/best.pt \
-    --n-graphs 8 --n-iters 200
 ```
 
-The TensorRT backend uses `torch.compile` with the `torch_tensorrt` backend, which automatically partitions the GNN: dense subgraphs (MLP, Linear, LayerNorm) are lowered to TRT engines, while sparse ops (scatter, gather) remain in PyTorch.
+See [`docs/deployment.md`](docs/deployment.md) for the inference engine API, backend details, and TRT graph partitioning.
 
-See [`docs/deployment.md`](docs/deployment.md) for Python API, benchmark output format, and details on TRT graph partitioning.
+See [`docs/kernels.md`](docs/kernels.md) for custom CUDA kernels (inference only).
 
-See [`src/kernels/README.md`](src/kernels/README.md) for custom CUDA kernels (inference only).
+## Plots
 
-## Benchmarks and plots
-
-After training and evaluation, benchmark inference and generate figures:
+Generate evaluation and benchmark figures:
 
 ```bash
-# Inference benchmarks (latency, throughput, memory)
-uv run scripts/benchmark_all.py -v
-
-# Generate all plots (requires: pip install matplotlib)
-uv run scripts/plot_results.py -v
-
-# Eval-only plots (no benchmark data needed)
-uv run scripts/plot_results.py --no-benchmark -v
+uv run scripts/plot_results.py -v            # eval + benchmark figures
+uv run scripts/plot_calibration.py           # reliability diagrams and ECE
 ```
 
-See [`src/benchmarks/README.md`](src/benchmarks/README.md) for report format and plot descriptions.
+## Development
+
+```bash
+make fmt                 # ruff format + import sorting
+make lint                # ruff check
+make test                # pytest
+```
+
+## License
+
+MIT License — see [LICENSE](LICENSE).
