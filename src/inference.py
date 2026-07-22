@@ -196,7 +196,7 @@ class InferenceEngine:
                 },
             )
             logger.info(
-                "torch_tensorrt backend enabled (precision=%s, " "min_block_size=%d)",
+                "torch_tensorrt backend enabled (precision=%s, min_block_size=%d)",
                 self.precision,
                 min_block_size,
             )

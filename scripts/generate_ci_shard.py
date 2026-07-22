@@ -20,6 +20,7 @@ import stim
 
 from sampling.graph import extract_circuit_metadata
 
+
 CIRCUIT_PATH = Path("data/circuits/d3_r3_p0_01.stim")
 OUTPUT_DIR = Path("data/ci_shard")
 SEED = 20240101

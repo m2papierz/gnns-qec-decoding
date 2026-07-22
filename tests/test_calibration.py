@@ -62,9 +62,7 @@ class TestReliabilityDiagram:
 
         diag = reliability_diagram(logits, labels, n_bins=10)
         nonempty = diag.bin_counts > 0
-        gaps = np.abs(
-            diag.bin_accuracies[nonempty] - diag.bin_confidences[nonempty]
-        )
+        gaps = np.abs(diag.bin_accuracies[nonempty] - diag.bin_confidences[nonempty])
         assert np.all(gaps < 0.05), f"Max gap {gaps.max():.4f} >= 0.05"
 
     def test_systematically_overconfident(self) -> None:

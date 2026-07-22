@@ -256,8 +256,12 @@ class TestEvaluatePoint:
             error_prob=0.01,
             num_shots=n,
             circuit_file="data/circuits/d3_r3_p0_01.stim",
-            manifest={"distance": 3, "rounds": 3, "error_prob": 0.01,
-                      "circuit_file": "data/circuits/d3_r3_p0_01.stim"},
+            manifest={
+                "distance": 3,
+                "rounds": 3,
+                "error_prob": 0.01,
+                "circuit_file": "data/circuits/d3_r3_p0_01.stim",
+            },
         )
 
     def test_two_identical_decoders_resolved_parity(
@@ -338,9 +342,7 @@ class TestEvaluatePoint:
     def test_reference_decoder_must_exist(self, simple_eval_set: EvalSet) -> None:
         decoders = {"a": FakeDecoder("a"), "b": FakeDecoder("b")}
         with pytest.raises(ValueError, match="reference_decoder"):
-            evaluate_point(
-                simple_eval_set, decoders, reference_decoder="missing"
-            )
+            evaluate_point(simple_eval_set, decoders, reference_decoder="missing")
 
     def test_needs_at_least_two_decoders(self, simple_eval_set: EvalSet) -> None:
         with pytest.raises(ValueError, match="at least 2 decoders"):
@@ -363,8 +365,12 @@ class TestEvaluatePoint:
             error_prob=0.01,
             num_shots=n,
             circuit_file="data/circuits/d3_r3_p0_01.stim",
-            manifest={"distance": 3, "rounds": 3, "error_prob": 0.01,
-                      "circuit_file": "data/circuits/d3_r3_p0_01.stim"},
+            manifest={
+                "distance": 3,
+                "rounds": 3,
+                "error_prob": 0.01,
+                "circuit_file": "data/circuits/d3_r3_p0_01.stim",
+            },
         )
         result = evaluate_point(
             es,
@@ -388,8 +394,12 @@ class TestEvaluatePoint:
             error_prob=0.01,
             num_shots=n,
             circuit_file="data/circuits/d3_r3_p0_01.stim",
-            manifest={"distance": 3, "rounds": 3, "error_prob": 0.01,
-                      "circuit_file": "data/circuits/d3_r3_p0_01.stim"},
+            manifest={
+                "distance": 3,
+                "rounds": 3,
+                "error_prob": 0.01,
+                "circuit_file": "data/circuits/d3_r3_p0_01.stim",
+            },
         )
         # 'ref': always predicts correctly (0 errors)
         # 'baseline': always predicts correctly too (parity with ref)
@@ -510,9 +520,7 @@ class TestGNNDecoder:
         assert result.shape == (10, 1)
         assert result.dtype == np.uint8
 
-    def test_empty_syndrome_predicts_no_flip(
-        self, gnn_decoder: GNNDecoder
-    ) -> None:
+    def test_empty_syndrome_predicts_no_flip(self, gnn_decoder: GNNDecoder) -> None:
         syndromes = np.zeros((5, 24), dtype=np.uint8)
         result = gnn_decoder.decode_batch(syndromes)
         assert np.all(result == 0)

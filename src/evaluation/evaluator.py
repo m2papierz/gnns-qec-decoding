@@ -32,6 +32,7 @@ from evaluation.stats import (
     wilson_interval,
 )
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -170,9 +171,7 @@ class EvalReport:
     def save(self, path: Path) -> None:
         """Write report as JSON."""
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(self.to_dict(), indent=2), encoding="utf-8"
-        )
+        path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -207,9 +206,7 @@ def load_eval_set(eval_dir: Path) -> EvalSet:
     """
     manifest_path = eval_dir / "manifest.json"
     if not manifest_path.exists():
-        raise FileNotFoundError(
-            f"No manifest.json in eval set directory: {eval_dir}"
-        )
+        raise FileNotFoundError(f"No manifest.json in eval set directory: {eval_dir}")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
@@ -237,9 +234,7 @@ def load_eval_set(eval_dir: Path) -> EvalSet:
     _required_fields = ["distance", "rounds", "error_prob", "circuit_file"]
     for f in _required_fields:
         if f not in manifest:
-            raise ValueError(
-                f"Manifest missing required field '{f}': {manifest_path}"
-            )
+            raise ValueError(f"Manifest missing required field '{f}': {manifest_path}")
 
     return EvalSet(
         syndromes=syndromes,
@@ -354,7 +349,7 @@ def evaluate_point(
             correct_arrays[name][start:end] = shot_correct
 
         shots_processed = end
-        is_final = (end >= n_total)
+        is_final = end >= n_total
 
         # Adaptive stopping checks only the primary comparison pair
         stopping = adaptive_stop(
@@ -366,7 +361,9 @@ def evaluate_point(
             break
 
     # If we ran all shots without a stopping decision
-    if stopping is None or (stopping.action == "continue" and shots_processed >= n_total):
+    if stopping is None or (
+        stopping.action == "continue" and shots_processed >= n_total
+    ):
         stopping = adaptive_stop(
             correct_arrays[reference_decoder][:shots_processed],
             correct_arrays[stopping_baseline][:shots_processed],
@@ -412,7 +409,9 @@ def evaluate_point(
         comp_correct = correct_arrays[comp_name][:shots_processed]
         mcnemar_results[comp_name] = mcnemar_test(ref_correct, comp_correct)
 
-    outcome = stopping.outcome if stopping.outcome is not None else EvalOutcome.UNRESOLVED
+    outcome = (
+        stopping.outcome if stopping.outcome is not None else EvalOutcome.UNRESOLVED
+    )
 
     return EvalPointResult(
         distance=eval_set.distance,

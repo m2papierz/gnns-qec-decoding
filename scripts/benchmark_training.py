@@ -37,6 +37,7 @@ from model.decoder import build_model
 from model.trainer import FocalBCEWithLogitsLoss
 from sampling.graph import build_fired_detector_graph, extract_circuit_metadata
 
+
 logger = logging.getLogger(__name__)
 
 CIRCUIT_DIR = Path("data/circuits")
@@ -81,9 +82,7 @@ def _build_batches_from_stim(
     sampler = circuit.compile_detector_sampler(seed=seed)
 
     total_shots = batch_size * n_batches
-    raw = sampler.sample(
-        shots=total_shots, bit_packed=False, append_observables=True
-    )
+    raw = sampler.sample(shots=total_shots, bit_packed=False, append_observables=True)
     n_det = meta.num_detectors
     syndromes = raw[:, :n_det].astype(np.uint8)
     observables = raw[:, n_det:].astype(np.float32)
@@ -189,7 +188,9 @@ def _run_config(
     def _step(batch: Batch) -> None:
         model.train()
         optimizer.zero_grad(set_to_none=True)
-        with torch.amp.autocast(device_type="cuda", enabled=use_amp, dtype=torch.bfloat16):
+        with torch.amp.autocast(
+            device_type="cuda", enabled=use_amp, dtype=torch.bfloat16
+        ):
             logits = model(batch)
             loss = criterion(logits.view(-1), batch.y)
         scaler.scale(loss).backward()
@@ -274,7 +275,9 @@ def _run_profiler(
         b = batches[i % n_batches]
         model.train()
         optimizer.zero_grad(set_to_none=True)
-        with torch.amp.autocast(device_type="cuda", enabled=use_amp, dtype=torch.bfloat16):
+        with torch.amp.autocast(
+            device_type="cuda", enabled=use_amp, dtype=torch.bfloat16
+        ):
             logits = model(b)
             loss = criterion(logits.view(-1), b.y)
         scaler.scale(loss).backward()
@@ -305,7 +308,9 @@ def _run_profiler(
             b = batches[i % n_batches]
             model.train()
             optimizer.zero_grad(set_to_none=True)
-            with torch.amp.autocast(device_type="cuda", enabled=use_amp, dtype=torch.bfloat16):
+            with torch.amp.autocast(
+                device_type="cuda", enabled=use_amp, dtype=torch.bfloat16
+            ):
                 logits = model(b)
                 loss = criterion(logits.view(-1), b.y)
             scaler.scale(loss).backward()
@@ -315,11 +320,7 @@ def _run_profiler(
             scaler.update()
             prof.step()
 
-    print(
-        prof.key_averages().table(
-            sort_by="cuda_time_total", row_limit=30
-        )
-    )
+    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=30))
 
     del model, optimizer, scaler
     torch.cuda.empty_cache()
@@ -435,7 +436,9 @@ def main() -> None:
 
         n_nodes = sum(b.num_nodes for b in d3_batches) / len(d3_batches)
         n_edges = sum(b.edge_index.shape[1] for b in d3_batches) / len(d3_batches)
-        print(f"  Built {len(d3_batches)} batches, avg nodes/batch={n_nodes:.0f}, edges/batch={n_edges:.0f}")
+        print(
+            f"  Built {len(d3_batches)} batches, avg nodes/batch={n_nodes:.0f}, edges/batch={n_edges:.0f}"
+        )
         print()
 
         for bs in args.batch_sizes:
@@ -447,11 +450,23 @@ def main() -> None:
 
             for use_compile in [False, True]:
                 for use_amp in [False, True]:
-                    tag = ("compiled" if use_compile else "eager") + "+" + ("bf16" if use_amp else "fp32")
+                    tag = (
+                        ("compiled" if use_compile else "eager")
+                        + "+"
+                        + ("bf16" if use_amp else "fp32")
+                    )
                     print(f"  Benchmarking d=3, BS={bs}, {tag}...", end="", flush=True)
-                    r = _run_config(bs_batches, distance=3, batch_size=bs, use_compile=use_compile, use_amp=use_amp)
+                    r = _run_config(
+                        bs_batches,
+                        distance=3,
+                        batch_size=bs,
+                        use_compile=use_compile,
+                        use_amp=use_amp,
+                    )
                     results.append(r)
-                    print(f"  {r.samples_per_sec:.0f} samp/s, p50={r.latency_ms_p50:.1f}ms")
+                    print(
+                        f"  {r.samples_per_sec:.0f} samp/s, p50={r.latency_ms_p50:.1f}ms"
+                    )
 
             if bs < max_bs:
                 del bs_batches
@@ -470,7 +485,9 @@ def main() -> None:
 
         n_nodes = sum(b.num_nodes for b in d7_batches) / len(d7_batches)
         n_edges = sum(b.edge_index.shape[1] for b in d7_batches) / len(d7_batches)
-        print(f"  Built {len(d7_batches)} batches, avg nodes/batch={n_nodes:.0f}, edges/batch={n_edges:.0f}")
+        print(
+            f"  Built {len(d7_batches)} batches, avg nodes/batch={n_nodes:.0f}, edges/batch={n_edges:.0f}"
+        )
         print()
 
         for bs in args.batch_sizes:
@@ -484,11 +501,23 @@ def main() -> None:
 
             for use_compile in [False, True]:
                 for use_amp in [False, True]:
-                    tag = ("compiled" if use_compile else "eager") + "+" + ("bf16" if use_amp else "fp32")
+                    tag = (
+                        ("compiled" if use_compile else "eager")
+                        + "+"
+                        + ("bf16" if use_amp else "fp32")
+                    )
                     print(f"  Benchmarking d=7, BS={bs}, {tag}...", end="", flush=True)
-                    r = _run_config(bs_batches, distance=7, batch_size=bs, use_compile=use_compile, use_amp=use_amp)
+                    r = _run_config(
+                        bs_batches,
+                        distance=7,
+                        batch_size=bs,
+                        use_compile=use_compile,
+                        use_amp=use_amp,
+                    )
                     results.append(r)
-                    print(f"  {r.samples_per_sec:.0f} samp/s, p50={r.latency_ms_p50:.1f}ms")
+                    print(
+                        f"  {r.samples_per_sec:.0f} samp/s, p50={r.latency_ms_p50:.1f}ms"
+                    )
 
             if bs < max_bs:
                 del bs_batches

@@ -176,9 +176,9 @@ def generate_eval_set(
     # Verify MWPM error count on full set (should match accumulated)
     full_mwpm_pred = matching.decode_batch(all_syndromes)[:, :n_obs]
     verified_errors = int(np.any(full_mwpm_pred != all_observables, axis=1).sum())
-    assert (
-        verified_errors == mwpm_errors_total
-    ), f"Accumulated {mwpm_errors_total} != verified {verified_errors}"
+    assert verified_errors == mwpm_errors_total, (
+        f"Accumulated {mwpm_errors_total} != verified {verified_errors}"
+    )
 
     # Extract detector coordinates
     coord_dict = circuit.get_detector_coordinates()

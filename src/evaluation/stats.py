@@ -231,9 +231,7 @@ def wilson_interval(
     if n_errors < 0:
         raise ValueError(f"n_errors must be non-negative, got {n_errors}")
     if n_errors > n_total:
-        raise ValueError(
-            f"n_errors ({n_errors}) cannot exceed n_total ({n_total})"
-        )
+        raise ValueError(f"n_errors ({n_errors}) cannot exceed n_total ({n_total})")
     if not (0.0 < alpha < 1.0):
         raise ValueError(f"alpha must be in (0, 1), got {alpha}")
 
@@ -244,9 +242,7 @@ def wilson_interval(
 
     denom = 1 + z2 / n
     center = (p_hat + z2 / (2 * n)) / denom
-    half_width = (
-        z * math.sqrt(p_hat * (1 - p_hat) / n + z2 / (4 * n * n)) / denom
-    )
+    half_width = z * math.sqrt(p_hat * (1 - p_hat) / n + z2 / (4 * n * n)) / denom
 
     lower = max(0.0, center - half_width)
     upper = min(1.0, center + half_width)
@@ -349,9 +345,7 @@ def adaptive_stop(
     gnn_errors = int(np.sum(~gnn_correct))
     baseline_errors = int(np.sum(~baseline_correct))
 
-    errors_sufficient = (
-        gnn_errors >= min_errors and baseline_errors >= min_errors
-    )
+    errors_sufficient = gnn_errors >= min_errors and baseline_errors >= min_errors
 
     if not errors_sufficient:
         if is_final:

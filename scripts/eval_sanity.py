@@ -21,8 +21,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from pathlib import Path
 from collections.abc import Sequence
+from pathlib import Path
 
 import numpy as np
 import pymatching
@@ -37,6 +37,7 @@ from sampling.graph import (
     extract_circuit_metadata,
 )
 from sampling.sampler import settings_from_circuit_dir
+
 
 logger = logging.getLogger(__name__)
 
@@ -157,9 +158,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
-        "checkpoint", type=Path, help="Path to best.pt checkpoint"
-    )
+    parser.add_argument("checkpoint", type=Path, help="Path to best.pt checkpoint")
     parser.add_argument(
         "--distances",
         type=int,
@@ -174,16 +173,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Filter to these error probabilities",
     )
-    parser.add_argument(
-        "--shots", type=int, default=100_000, help="Shots per setting"
-    )
+    parser.add_argument("--shots", type=int, default=100_000, help="Shots per setting")
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--seed", type=int, default=99)
+    parser.add_argument("--circuit-dir", type=Path, default=CIRCUIT_DIR)
     parser.add_argument(
-        "--circuit-dir", type=Path, default=CIRCUIT_DIR
-    )
-    parser.add_argument(
-        "-o", "--output", type=Path, default=None,
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
         help="Output JSON path (default: <checkpoint_dir>/eval_sanity.json)",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -227,18 +225,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         distances=args.distances,
         error_probs=args.error_probs,
     )
-    dist_label = (
-        ",".join(str(d) for d in args.distances)
-        if args.distances
-        else "all"
-    )
+    dist_label = ",".join(str(d) for d in args.distances) if args.distances else "all"
     logger.info("Found %d settings for d={%s}", len(settings), dist_label)
 
     results = []
     for s in settings:
         logger.info(
             "Evaluating d=%d r=%d p=%.4f ...",
-            s.distance, s.rounds, s.error_prob,
+            s.distance,
+            s.rounds,
+            s.error_prob,
         )
         r = evaluate_at_setting(
             model=model,
@@ -268,9 +264,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     distances_seen = sorted({r["distance"] for r in results})
     print()
     print("=" * 80)
-    print(
-        f"Sanity Evaluation (d={distances_seen}): GNN vs MWPM"
-    )
+    print(f"Sanity Evaluation (d={distances_seen}): GNN vs MWPM")
     print("=" * 80)
     print(
         f"{'d':>3} {'p':>8} {'GNN LER':>12} {'GNN 95% CI':>20} "

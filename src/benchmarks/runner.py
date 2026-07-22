@@ -19,9 +19,9 @@ from __future__ import annotations
 import json
 import logging
 import platform
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Sequence
 from typing import Any
 
 import torch

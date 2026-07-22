@@ -36,6 +36,7 @@ from sampling.graph import (
     extract_circuit_metadata,
 )
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -219,9 +220,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--checkpoint", type=Path, required=True, help="Path to best.pt"
     )
-    parser.add_argument(
-        "--distance", type=int, required=True, help="Code distance"
-    )
+    parser.add_argument("--distance", type=int, required=True, help="Code distance")
     parser.add_argument(
         "--eval-dir",
         type=Path,
@@ -256,9 +255,7 @@ def main(argv: list[str] | None = None) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model, cfg, threshold = _load_model(args.checkpoint, device)
-    logger.info(
-        "Loaded checkpoint: %s (threshold=%.3f)", args.checkpoint, threshold
-    )
+    logger.info("Loaded checkpoint: %s (threshold=%.3f)", args.checkpoint, threshold)
 
     error_probs = _discover_error_probs(args.eval_dir, d)
     if not error_probs:

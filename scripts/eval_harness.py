@@ -27,8 +27,8 @@ import json
 import logging
 import sys
 import time
-from pathlib import Path
 from collections.abc import Sequence
+from pathlib import Path
 
 import numpy as np
 import stim
@@ -44,6 +44,7 @@ from evaluation.evaluator import (
 )
 from model.decoder import build_model
 from sampling.graph import CircuitMetadata, extract_circuit_metadata
+
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +63,7 @@ def _build_dry_run_eval_set() -> EvalSet:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     syndromes = np.load(CI_SHARD_DIR / "syndromes.npy").astype(np.uint8)
     observables = np.load(CI_SHARD_DIR / "observables.npy").astype(np.uint8)
-    detector_coords = np.load(CI_SHARD_DIR / "detector_coords.npy").astype(
-        np.float64
-    )
+    detector_coords = np.load(CI_SHARD_DIR / "detector_coords.npy").astype(np.float64)
 
     if observables.ndim == 1:
         observables = observables[:, np.newaxis]
@@ -107,9 +106,7 @@ def _print_results(report: EvalReport) -> None:
     print("Evaluation Results: Multi-Decoder Paired Comparison")
     print("=" * 100)
 
-    for result in sorted(
-        report.results, key=lambda r: (r.distance, r.error_prob)
-    ):
+    for result in sorted(report.results, key=lambda r: (r.distance, r.error_prob)):
         print(
             f"\n--- d={result.distance} r={result.rounds} "
             f"p={result.error_prob:.4f} | "
@@ -261,9 +258,7 @@ def run_full_eval(
             circuit_path = Path.cwd() / eval_set.circuit_file
 
         circuit = stim.Circuit.from_file(str(circuit_path))
-        metadata = extract_circuit_metadata(
-            circuit, eval_set.distance, eval_set.rounds
-        )
+        metadata = extract_circuit_metadata(circuit, eval_set.distance, eval_set.rounds)
 
         gnn_decoder = GNNDecoder.from_metadata(
             model=model,

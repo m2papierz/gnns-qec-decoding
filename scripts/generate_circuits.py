@@ -11,6 +11,7 @@ from pathlib import Path
 
 import stim
 
+
 logger = logging.getLogger(__name__)
 
 DISTANCES: list[int] = [3, 5, 7]

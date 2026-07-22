@@ -178,14 +178,13 @@ class TrainConfig:
             raise ValueError(f"sample_budget must be >= 1, got {self.sample_budget}")
         if self.val_interval_samples < 1:
             raise ValueError(
-                f"val_interval_samples must be >= 1, "
-                f"got {self.val_interval_samples}"
+                f"val_interval_samples must be >= 1, got {self.val_interval_samples}"
             )
         if self.val_size < 1:
             raise ValueError(f"val_size must be >= 1, got {self.val_size}")
         if not (0.0 < self.warmup_fraction < 1.0):
             raise ValueError(
-                f"warmup_fraction must be in (0, 1), " f"got {self.warmup_fraction}"
+                f"warmup_fraction must be in (0, 1), got {self.warmup_fraction}"
             )
 
 
@@ -663,7 +662,7 @@ class Trainer:
         t0 = time.perf_counter()
 
         logger.info(
-            "Starting training: budget=%d samples " "(val every %d, patience=%d)",
+            "Starting training: budget=%d samples (val every %d, patience=%d)",
             self.cfg.sample_budget,
             self.cfg.val_interval_samples,
             self.cfg.patience,
@@ -774,7 +773,7 @@ class Trainer:
                 and checks_without_improvement >= self.cfg.patience
             ):
                 logger.info(
-                    "Early stopping at %d samples " "(%d checks w/o improvement)",
+                    "Early stopping at %d samples (%d checks w/o improvement)",
                     self.samples_consumed,
                     self.cfg.patience,
                 )

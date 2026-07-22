@@ -168,8 +168,8 @@ def _measure_gpu_rate() -> float | None:
         import torch
         from torch_geometric.data import Batch, Data
 
-        from model.encoder import DetectorGraphEncoder
         from model.decoder import LogicalHead
+        from model.encoder import DetectorGraphEncoder
     except ImportError:
         logger.warning("PyTorch/PyG not available; cannot measure GPU rate")
         return None

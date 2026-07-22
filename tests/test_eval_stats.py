@@ -243,7 +243,6 @@ class TestWilsonInterval:
             wilson_interval(10, 100, alpha=1.0)
 
 
-
 # ---------------------------------------------------------------------------
 # Per-round LER
 # ---------------------------------------------------------------------------
@@ -402,9 +401,7 @@ class TestAdaptiveStop:
         baseline[:30] = False
 
         # With min_errors=20, these 30 errors suffice
-        decision = adaptive_stop(
-            gnn, baseline, is_final=True, min_errors=20
-        )
+        decision = adaptive_stop(gnn, baseline, is_final=True, min_errors=20)
         assert decision.mcnemar is not None
 
         # With default min_errors=100, they don't

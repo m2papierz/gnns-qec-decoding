@@ -110,7 +110,7 @@ class FiredDetectorGraph:
             )
         if self.fired_indices.shape != (N,):
             raise ValueError(
-                f"fired_indices shape {self.fired_indices.shape} != " f"expected ({N},)"
+                f"fired_indices shape {self.fired_indices.shape} != expected ({N},)"
             )
 
 

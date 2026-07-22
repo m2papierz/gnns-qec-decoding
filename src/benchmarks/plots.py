@@ -17,8 +17,8 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
-from pathlib import Path
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import numpy as np

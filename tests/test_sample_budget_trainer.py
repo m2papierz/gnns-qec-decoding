@@ -8,7 +8,7 @@ import pytest
 import stim
 import torch
 
-from model.trainer import Trainer, TrainConfig
+from model.trainer import TrainConfig, Trainer
 
 
 @pytest.fixture()
@@ -48,9 +48,7 @@ def _make_config(circuit_dir, output_dir, **overrides):
 class TestSampleBudgetSmoke:
     """Smoke test: budget=1000, batch=64, CPU."""
 
-    def test_completes_and_produces_checkpoint(
-        self, circuit_dir, tmp_path
-    ) -> None:
+    def test_completes_and_produces_checkpoint(self, circuit_dir, tmp_path) -> None:
         cfg = _make_config(circuit_dir, tmp_path / "out")
         trainer = Trainer(cfg)
         best_path = trainer.fit()
@@ -128,9 +126,7 @@ class TestEarlyStopping:
 class TestScheduler:
     """LR scheduler is parameterized by budget fraction."""
 
-    def test_lr_changes_during_training(
-        self, circuit_dir, tmp_path
-    ) -> None:
+    def test_lr_changes_during_training(self, circuit_dir, tmp_path) -> None:
         cfg = _make_config(
             circuit_dir,
             tmp_path / "out",
