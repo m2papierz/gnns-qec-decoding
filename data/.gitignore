@@ -3,3 +3,18 @@
 
 # excluding this file
 !.gitignore
+
+# and committed circuit files
+!circuits/
+!circuits/*.stim
+
+# and committed CI shard
+!ci_shard/
+!ci_shard/*.npy
+!ci_shard/*.json
+
+# and committed eval sets
+!eval/
+!eval/*/
+!eval/*/*.npz
+!eval/*/*.json
