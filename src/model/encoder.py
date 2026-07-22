@@ -13,8 +13,8 @@ import torch
 import torch.nn as nn
 from torch_geometric.nn import GINEConv, LayerNorm
 
-from gnn.models.ops import fused_norm_residual_dropout, symmetric_edge_features
-from qec_generator.graph import EDGE_DIM, NODE_DIM
+from model.ops import fused_norm_residual_dropout, symmetric_edge_features
+from sampling.graph import EDGE_DIM, NODE_DIM
 
 
 class _GINEBlock(nn.Module):

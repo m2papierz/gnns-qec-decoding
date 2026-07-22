@@ -27,10 +27,10 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch_geometric.data import Batch
 from torch_geometric.loader import DataLoader
 
-from gnn.dataset import StreamingSurfaceCodeDataset
-from gnn.models.decoder import QECDecoder, build_model
-from qec_generator.sampler import settings_from_circuit_dir
-from qec_generator.utils import stable_seed
+from model.dataset import StreamingSurfaceCodeDataset
+from model.decoder import QECDecoder, build_model
+from sampling.sampler import settings_from_circuit_dir
+from sampling.seeding import stable_seed
 
 
 logger = logging.getLogger(__name__)
@@ -351,7 +351,7 @@ class Trainer:
 
     def _setup_model(self) -> None:
         """Build model, set compute backend, and move to device."""
-        from gnn.models.ops import set_backend
+        from model.ops import set_backend
 
         set_backend(self.cfg.backend)
 

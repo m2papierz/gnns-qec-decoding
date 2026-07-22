@@ -13,8 +13,8 @@ from torch_geometric.data import Batch
 from torch_geometric.nn import global_add_pool, global_max_pool
 from torch_geometric.utils import softmax
 
-from gnn.models.encoder import DetectorGraphEncoder
-from qec_generator.graph import EDGE_DIM, NODE_DIM
+from model.encoder import DetectorGraphEncoder
+from sampling.graph import EDGE_DIM, NODE_DIM
 
 
 class LogicalHead(nn.Module):

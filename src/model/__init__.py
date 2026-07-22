@@ -1,11 +1,11 @@
-"""GNN model components for QEC decoding."""
+"""GNN-based decoders for quantum error correction."""
 
-from gnn.models.encoder import DetectorGraphEncoder
-from gnn.models.decoder import (
+from model.decoder import (
     LogicalHead,
     QECDecoder,
     build_model,
 )
+from model.encoder import DetectorGraphEncoder
 
 
 __all__ = [

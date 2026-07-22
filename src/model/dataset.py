@@ -20,9 +20,9 @@ import torch
 from torch.utils.data import IterableDataset
 from torch_geometric.data import Data
 
-from qec_generator.graph import EDGE_DIM, NODE_DIM, build_fired_detector_graph
-from qec_generator.sampler import CircuitSetting, WorkerSampler
-from qec_generator.utils import stable_seed
+from sampling.graph import EDGE_DIM, NODE_DIM, build_fired_detector_graph
+from sampling.sampler import CircuitSetting, WorkerSampler
+from sampling.seeding import stable_seed
 
 
 logger = logging.getLogger(__name__)
