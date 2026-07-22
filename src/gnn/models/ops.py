@@ -26,11 +26,9 @@ from __future__ import annotations
 import logging
 import os
 from enum import Enum
-from typing import Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 logger = logging.getLogger(__name__)
@@ -174,84 +172,6 @@ def fused_norm_residual_dropout(
     if training:
         x = dropout(x)
     return x + residual
-
-
-def edge_mean_pool(
-    edge_h: torch.Tensor,
-    edge_batch: torch.Tensor,
-    n_graphs: int,
-) -> torch.Tensor:
-    """Mean-pool edge embeddings per graph.
-
-    Parameters
-    ----------
-    edge_h : Tensor, shape ``(E_total, H)``
-        Edge embeddings across the full batch.
-    edge_batch : Tensor, shape ``(E_total,)``
-        Graph membership index for each edge.
-    n_graphs : int
-        Number of graphs in the batch.
-
-    Returns
-    -------
-    Tensor, shape ``(n_graphs, H)``
-    """
-    from torch_geometric.nn import global_add_pool
-
-    g_edge = global_add_pool(edge_h, edge_batch, size=n_graphs)
-    edge_counts = torch.zeros(n_graphs, device=edge_h.device)
-    edge_counts.scatter_add_(
-        0, edge_batch, torch.ones(edge_batch.shape[0], device=edge_h.device)
-    )
-    return g_edge / edge_counts.clamp(min=1).unsqueeze(-1)
-
-
-def graph_normalized_bce(
-    logits: torch.Tensor,
-    target: torch.Tensor,
-    edge_graph: torch.Tensor,
-    n_graphs: int,
-    pos_weight: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
-    """Per-graph normalised BCE with logits for edge predictions.
-
-    Computes element-wise BCE, averages within each graph, then averages
-    across graphs.  This prevents larger graphs from dominating the
-    gradient in mixed-distance batches.
-
-    Parameters
-    ----------
-    logits : Tensor, shape ``(E_total,)``
-        Raw edge logits.
-    target : Tensor, shape ``(E_total,)``
-        Binary edge targets.
-    edge_graph : Tensor, shape ``(E_total,)``
-        Graph index for each edge.
-    n_graphs : int
-        Number of graphs in the batch.
-    pos_weight : Tensor or None
-        Positive-class weight for BCE.
-
-    Returns
-    -------
-    Tensor, scalar
-    """
-    if _active_backend == Backend.CUDA and _cuda_module is not None:
-        try:
-            return _cuda_module.graph_normalized_bce(
-                logits, target, edge_graph, n_graphs, pos_weight
-            )
-        except Exception:
-            pass
-
-    raw = F.binary_cross_entropy_with_logits(
-        logits, target, pos_weight=pos_weight, reduction="none"
-    )
-    graph_loss = torch.zeros(n_graphs, device=logits.device)
-    graph_count = torch.zeros(n_graphs, device=logits.device)
-    graph_loss.scatter_add_(0, edge_graph, raw)
-    graph_count.scatter_add_(0, edge_graph, torch.ones_like(raw))
-    return (graph_loss / graph_count.clamp(min=1)).mean()
 
 
 _init_backend_from_env()

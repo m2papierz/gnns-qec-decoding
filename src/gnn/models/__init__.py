@@ -1,8 +1,7 @@
 """GNN model components for QEC decoding."""
 
 from gnn.models.encoder import DetectorGraphEncoder
-from gnn.models.heads import (
-    EdgeHead,
+from gnn.models.decoder import (
     LogicalHead,
     QECDecoder,
     build_model,
@@ -11,7 +10,6 @@ from gnn.models.heads import (
 
 __all__ = [
     "DetectorGraphEncoder",
-    "EdgeHead",
     "LogicalHead",
     "QECDecoder",
     "build_model",

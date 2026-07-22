@@ -2,10 +2,9 @@
 Message-passing encoder for detector-graph decoding.
 
 Provides the shared GNN backbone used by all three decoding heads.
-Transforms raw node features (syndrome bits) and edge attributes
-(error probability, MWPM weight) into learned node *and edge*
-embeddings via neighbourhood message passing with explicit edge
-co-evolution.
+Transforms raw node features and edge attributes into learned node
+*and edge* embeddings via neighbourhood message passing with explicit
+edge co-evolution.
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ import torch.nn as nn
 from torch_geometric.nn import GINEConv, LayerNorm
 
 from gnn.models.ops import fused_norm_residual_dropout, symmetric_edge_features
+from qec_generator.graph import EDGE_DIM, NODE_DIM
 
 
 class _GINEBlock(nn.Module):
@@ -119,9 +119,9 @@ class DetectorGraphEncoder(nn.Module):
     Parameters
     ----------
     node_dim : int
-        Input node feature dimensionality (default: 1).
+        Input node feature dimensionality (default: 6).
     edge_dim : int
-        Input edge feature dimensionality (default: 2).
+        Input edge feature dimensionality (default: 5).
     hidden_dim : int
         Hidden embedding dimensionality (default: 128).
     num_layers : int
@@ -132,8 +132,8 @@ class DetectorGraphEncoder(nn.Module):
 
     def __init__(
         self,
-        node_dim: int = 1,
-        edge_dim: int = 2,
+        node_dim: int = NODE_DIM,
+        edge_dim: int = EDGE_DIM,
         hidden_dim: int = 128,
         num_layers: int = 6,
         dropout: float = 0.1,
@@ -170,11 +170,11 @@ class DetectorGraphEncoder(nn.Module):
         Parameters
         ----------
         x : Tensor, shape (N, node_dim)
-            Raw node features (syndrome bits).
+            Raw node features.
         edge_index : Tensor, shape (2, E)
             Directed edge indices in COO format (bidirectional).
         edge_attr : Tensor, shape (E, edge_dim)
-            Raw edge attributes ``[error_prob, weight]``.
+            Raw edge attributes.
 
         Returns
         -------
