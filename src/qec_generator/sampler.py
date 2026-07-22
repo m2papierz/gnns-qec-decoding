@@ -1,335 +1,192 @@
-"""Raw data generation using Stim circuit sampling."""
+"""Streaming sampling for QEC decoding.
+
+Provides ``WorkerSampler`` for per-worker streaming syndrome generation and
+helpers for circuit construction and setting discovery from committed circuit
+files.
+"""
 
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import stim
-from tqdm import tqdm
 
-from constants import DEM_EXT, STIM_EXT
-from qec_generator.config import Config
-from qec_generator.graph import DetectorGraph, build_detector_graph
-from qec_generator.utils import save_json, save_npy, stable_seed
+from qec_generator.graph import (
+    CircuitMetadata,
+    extract_circuit_metadata,
+)
+from qec_generator.utils import stable_seed
 
 
 logger = logging.getLogger(__name__)
 
 
-def build_circuit(
-    cfg: Config,
-    distance: int,
-    rounds: int,
-    p: float,
-) -> stim.Circuit:
-    """
-    Build a Stim surface code circuit for given parameters.
+_CIRCUIT_FILENAME_RE = re.compile(r"d(\d+)_r(\d+)_p(.+)\.stim$")
+
+
+@dataclass(frozen=True, slots=True)
+class CircuitSetting:
+    """A single (d, r, p) setting with its committed circuit file.
 
     Parameters
     ----------
-    cfg : Config
-        Configuration with family and noise parameters.
+    circuit_path : Path
+        Path to the ``.stim`` circuit file.
     distance : int
         Code distance.
     rounds : int
         Number of syndrome measurement rounds.
-    p : float
+    error_prob : float
         Physical error probability.
+    """
+
+    circuit_path: Path
+    distance: int
+    rounds: int
+    error_prob: float
+
+    def __post_init__(self) -> None:
+        if self.distance < 1:
+            raise ValueError(f"distance must be >= 1, got {self.distance}")
+        if self.rounds < 1:
+            raise ValueError(f"rounds must be >= 1, got {self.rounds}")
+        if not (0 < self.error_prob < 1):
+            raise ValueError(f"error_prob must be in (0, 1), got {self.error_prob}")
+
+
+def settings_from_circuit_dir(
+    circuit_dir: Path,
+    *,
+    distances: Sequence[int] | None = None,
+    error_probs: Sequence[float] | None = None,
+) -> list[CircuitSetting]:
+    """Discover circuit settings from committed ``.stim`` files.
+
+    Parses filenames matching ``d{d}_r{r}_p{p}.stim`` and optionally
+    filters by distance and error probability.
+
+    Parameters
+    ----------
+    circuit_dir : Path
+        Directory containing circuit files.
+    distances : sequence of int, optional
+        Include only these code distances.  ``None`` means all.
+    error_probs : sequence of float, optional
+        Include only these error probabilities.  ``None`` means all.
 
     Returns
     -------
-    stim.Circuit
-        Generated surface code circuit.
+    list[CircuitSetting]
+        Sorted by ``(distance, rounds, error_prob)``.
+
+    Raises
+    ------
+    ValueError
+        If no matching circuit files are found.
     """
-    return stim.Circuit.generated(
-        f"surface_code:{cfg.family}",
-        distance=distance,
-        rounds=rounds,
-        **cfg.resolve_noise(p),
-    )
+    circuit_dir = Path(circuit_dir)
+    dist_set = set(distances) if distances is not None else None
+    prob_set = {round(p, 12) for p in error_probs} if error_probs is not None else None
+
+    settings: list[CircuitSetting] = []
+    for f in sorted(circuit_dir.iterdir()):
+        m = _CIRCUIT_FILENAME_RE.match(f.name)
+        if m is None:
+            continue
+
+        d = int(m.group(1))
+        r = int(m.group(2))
+        p = float(m.group(3).replace("_", "."))
+
+        if dist_set is not None and d not in dist_set:
+            continue
+        if prob_set is not None and round(p, 12) not in prob_set:
+            continue
+
+        settings.append(
+            CircuitSetting(
+                circuit_path=f,
+                distance=d,
+                rounds=r,
+                error_prob=p,
+            )
+        )
+
+    if not settings:
+        raise ValueError(
+            f"No matching circuit files in {circuit_dir} "
+            f"(distances={distances}, error_probs={error_probs})"
+        )
+
+    return settings
 
 
-def _write_graph(
-    cfg: Config,
-    out_dir: Path,
-    graph: DetectorGraph,
-    distance: int,
-    rounds: int,
-    p: float,
-    overwrite: bool,
-) -> None:
-    """
-    Write graph tensors and metadata to disk.
+class WorkerSampler:
+    """Per-worker streaming sampler owning Stim CompiledDetectorSamplers.
+
+    Each DataLoader worker creates one ``WorkerSampler`` with a
+    deterministic seed.  The sampler holds compiled samplers for every
+    circuit setting and a PCG64 RNG for uniform setting selection.
 
     Parameters
     ----------
-    cfg : Config
-        Configuration object.
-    out_dir : Path
-        Output directory for this setting.
-    graph : DetectorGraph
-        Constructed detector graph.
-    distance : int
-        Code distance.
-    rounds : int
-        Number of rounds.
-    p : float
-        Error probability.
-    overwrite : bool
-        Whether to overwrite existing files.
+    settings : sequence of CircuitSetting
+        Circuit settings to sample from.
+    worker_seed : int
+        Deterministic per-worker seed (derived from master seed + worker id
+        via BLAKE2b ``stable_seed``).
     """
-    gdir = out_dir / "graph"
-    gdir.mkdir(parents=True, exist_ok=True)
 
-    # Save graph tensors
-    save_npy(gdir / "edge_index.npy", graph.edge_index, overwrite)
-    save_npy(gdir / "edge_error_prob.npy", graph.edge_error_prob, overwrite)
-    save_npy(gdir / "edge_weight.npy", graph.edge_weight, overwrite)
-    save_npy(gdir / "node_coords.npy", graph.node_coords, overwrite)
-    save_npy(gdir / "node_is_boundary.npy", graph.node_is_boundary, overwrite)
-    if graph.observable_flips is not None:
-        save_npy(gdir / "observable_flips.npy", graph.observable_flips, overwrite)
+    def __init__(
+        self,
+        settings: Sequence[CircuitSetting],
+        worker_seed: int,
+    ) -> None:
+        if not settings:
+            raise ValueError("At least one CircuitSetting required")
 
-    # Save metadata
-    save_json(
-        gdir / "meta.json",
-        {
-            "family": cfg.family,
-            "distance": distance,
-            "rounds": rounds,
-            "error_prob": p,
-            "num_nodes": graph.num_nodes,
-            "num_detectors": graph.num_detectors,
-            "num_observables": graph.num_observables,
-            "num_edges": graph.edge_index.shape[1],
-            "has_boundary": graph.has_boundary,
-        },
-        overwrite,
-    )
+        self._rng = np.random.Generator(np.random.PCG64(worker_seed))
+        self._n_settings = len(settings)
+        self._error_probs: list[float] = []
+        self._samplers: list[stim.CompiledDetectorSampler] = []
+        self._metadata: list[CircuitMetadata] = []
 
+        for i, s in enumerate(settings):
+            circuit = stim.Circuit.from_file(str(s.circuit_path))
+            sampler_seed = stable_seed("sampler", f"idx={i}", base=worker_seed)
+            compiled = circuit.compile_detector_sampler(seed=sampler_seed)
+            meta = extract_circuit_metadata(circuit, s.distance, s.rounds)
 
-def _generate_split(
-    cfg: Config,
-    out_dir: Path,
-    circuit: stim.Circuit,
-    dem: stim.DetectorErrorModel,
-    split: str,
-    n_samples: int,
-    seed: int | None,
-    overwrite: bool,
-    show_progress: bool,
-) -> None:
-    """
-    Generate syndrome/logical arrays for one split.
+            self._samplers.append(compiled)
+            self._metadata.append(meta)
+            self._error_probs.append(s.error_prob)
 
-    Parameters
-    ----------
-    cfg : Config
-        Configuration object.
-    out_dir : Path
-        Output directory for this setting.
-    circuit : stim.Circuit
-        Compiled circuit.
-    dem : stim.DetectorErrorModel
-        Detector error model.
-    split : str
-        Split name ("train", "val", or "test").
-    n_samples : int
-        Number of samples to generate.
-    seed : int or None
-        Random seed for this split.
-    overwrite : bool
-        Whether to overwrite existing files.
-    show_progress : bool
-        Show tqdm progress bar.
-    """
-    if n_samples <= 0:
-        logger.warning("Skipping split '%s' with n_samples=%d", split, n_samples)
-        return
+    def sample(self) -> tuple[np.ndarray, np.ndarray, CircuitMetadata, float]:
+        """Sample one shot from a uniformly chosen setting.
 
-    syn_path = out_dir / f"{split}_syndrome.npy"
-    log_path = out_dir / f"{split}_logical.npy"
-    meta_path = out_dir / f"{split}_meta.json"
-
-    # Skip only when *all* outputs already exist and overwrite is off.
-    all_exist = syn_path.exists() and log_path.exists() and meta_path.exists()
-    if all_exist and not overwrite:
-        logger.debug("Split '%s' already exists, skipping", split)
-        return
-
-    num_det, num_obs = dem.num_detectors, dem.num_observables
-    sampler = circuit.compile_detector_sampler(seed=seed)
-
-    syndromes = np.empty((n_samples, num_det), dtype=np.uint8)
-    logicals = np.empty((n_samples, num_obs), dtype=np.uint8)
-
-    chunk = max(1, cfg.chunk_size)
-    iterator = range(0, n_samples, chunk)
-    if show_progress:
-        iterator = tqdm(iterator, desc=f"{split}", leave=False)
-
-    offset = 0
-    for _ in iterator:
-        batch_size = min(chunk, n_samples - offset)
-        dets, obs = sampler.sample(
-            shots=batch_size, separate_observables=True, bit_packed=False
+        Returns
+        -------
+        syndrome : ndarray, shape ``(D,)``, uint8
+            Detector syndrome bit-vector.
+        observables : ndarray, shape ``(num_obs,)``, uint8
+            Observable flip vector.
+        metadata : CircuitMetadata
+            Circuit metadata for the sampled setting.
+        error_prob : float
+            Physical error probability of the sampled setting.
+        """
+        idx = int(self._rng.integers(self._n_settings))
+        dets, obs = self._samplers[idx].sample(
+            shots=1, separate_observables=True, bit_packed=False
         )
-        syndromes[offset : offset + batch_size] = dets.astype(np.uint8, copy=False)
-        logicals[offset : offset + batch_size] = obs.astype(np.uint8, copy=False)
-        offset += batch_size
-
-    # Sanity: verify we filled the pre-allocated arrays completely.
-    assert (
-        offset == n_samples
-    ), f"Sampling mismatch: expected {n_samples} shots, got {offset}"
-
-    # Save arrays — respect caller's overwrite flag. The early-return guard
-    # above already skips when files exist and overwrite=False, so by this
-    # point we always want to write (either first run or explicit overwrite).
-    save_npy(syn_path, syndromes, overwrite=overwrite)
-    save_npy(log_path, logicals, overwrite=overwrite)
-
-    # Save metadata
-    save_json(
-        meta_path,
-        {
-            "split": split,
-            "num_samples": n_samples,
-            "num_detectors": num_det,
-            "num_observables": num_obs,
-            "seed": seed,
-            "chunk_size": cfg.chunk_size,
-            "stim_version": getattr(stim, "__version__", "unknown"),
-        },
-        overwrite=overwrite,
-    )
-
-
-def generate_for_setting(
-    cfg: Config,
-    distance: int,
-    rounds: int,
-    p: float,
-    overwrite: bool = False,
-    save_artifacts: bool = True,
-    show_progress: bool = True,
-) -> None:
-    """
-    Generate graph and all splits for a single setting.
-
-    Parameters
-    ----------
-    cfg : Config
-        Configuration object.
-    distance : int
-        Code distance.
-    rounds : int
-        Number of syndrome measurement rounds.
-    p : float
-        Physical error probability.
-    overwrite : bool, default=False
-        Overwrite existing files.
-    save_artifacts : bool, default=True
-        Save circuit and DEM files for debugging.
-    show_progress : bool, default=True
-        Display progress bars.
-    """
-    out_dir = cfg.setting_dir(distance, rounds, p)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Build circuit and error model
-    circuit = build_circuit(cfg, distance, rounds, p)
-    dem = circuit.detector_error_model(decompose_errors=True)
-
-    # Save circuit/DEM for debugging
-    if save_artifacts:
-        circuit_path = out_dir / f"circuit{STIM_EXT}"
-        dem_path = out_dir / f"model{DEM_EXT}"
-        if overwrite or not circuit_path.exists():
-            circuit.to_file(circuit_path)
-            logger.debug("Saved circuit to %s", circuit_path)
-        if overwrite or not dem_path.exists():
-            dem.to_file(dem_path)
-            logger.debug("Saved DEM to %s", dem_path)
-
-    # Build and save detector graph
-    graph = build_detector_graph(circuit, dem, include_boundary=True)
-    _write_graph(
-        cfg,
-        out_dir=out_dir,
-        graph=graph,
-        distance=distance,
-        rounds=rounds,
-        p=p,
-        overwrite=overwrite,
-    )
-
-    # Generate each split
-    for split, n_samples in cfg.num_samples.items():
-        split_seed = stable_seed(
-            f"family={cfg.family}",
-            f"d={distance}",
-            f"r={rounds}",
-            f"p={p:.12g}",
-            f"split={split}",
-            base=cfg.seed,
+        return (
+            dets[0].astype(np.uint8, copy=False),
+            obs[0].astype(np.uint8, copy=False),
+            self._metadata[idx],
+            self._error_probs[idx],
         )
-        _generate_split(
-            cfg,
-            out_dir=out_dir,
-            circuit=circuit,
-            dem=dem,
-            split=split,
-            n_samples=n_samples,
-            seed=split_seed,
-            overwrite=overwrite,
-            show_progress=show_progress,
-        )
-
-
-def generate_raw_data(
-    cfg: Config,
-    overwrite: bool = False,
-    save_artifacts: bool = True,
-) -> None:
-    """
-    Generate raw data for all settings in configuration.
-
-    Creates directory structure:
-    raw_data_dir/
-        d{distance}_r{rounds}_p{error_prob}/
-            graph/
-                edge_index.npy, edge_error_prob.npy, ...
-            {split}_syndrome.npy
-            {split}_logical.npy
-            circuit.stim
-            model.dem
-
-    Parameters
-    ----------
-    cfg : Config
-        Configuration with all settings to generate.
-    overwrite : bool, default=False
-        Overwrite existing files.
-    save_artifacts : bool, default=True
-        Save Stim circuit and DEM files.
-    """
-    cfg.raw_data_dir.mkdir(parents=True, exist_ok=True)
-    settings = list(cfg.iter_settings())
-
-    logger.info("Generating raw data for %d settings", len(settings))
-
-    for d, r, p in tqdm(settings, desc="Settings"):
-        generate_for_setting(
-            cfg,
-            distance=d,
-            rounds=r,
-            p=p,
-            overwrite=overwrite,
-            save_artifacts=save_artifacts,
-            show_progress=True,
-        )
-
-    logger.info("Raw data generation complete")

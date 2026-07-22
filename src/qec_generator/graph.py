@@ -1,308 +1,253 @@
-"""Detector graph construction for GNN-based QEC decoding."""
+"""Detector graph construction for GNN-based QEC decoding.
+
+``FiredDetectorGraph`` / ``build_fired_detector_graph``: fired detectors
+only, complete graph with learned features. Primary representation for
+GNN training and inference.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
-import networkx as nx
 import numpy as np
-import pymatching
 import stim
 
 
-@dataclass(frozen=True)
-class DetectorGraph:
-    """
-    Detector graph for GNN-based decoding.
+NODE_DIM: int = 6
+"""Node feature dimensionality: x_norm, y_norm, t_norm, d_x, d_y, basis."""
 
-    Represents a quantum error correction decoding problem as a graph where
-    nodes correspond to syndrome detectors and edges represent error correlations.
-
-    Attributes
-    ----------
-    edge_index : ndarray, shape (2, E), int64
-        Directed COO edges (bidirectional: both u=>v and v=>u stored).
-    edge_error_prob : ndarray, shape (E,), float32
-        Per-edge error probability.
-    edge_weight : ndarray, shape (E,), float32
-        Per-edge MWPM weight (typically ``-log(p/(1-p))``).
-    node_coords : ndarray, shape (N, C), float32
-        Node coordinates (NaN if unavailable).
-    node_is_boundary : ndarray, shape (N,), bool
-        True for virtual boundary node.
-    num_nodes : int
-        Total nodes (detectors + optional boundary).
-    num_detectors : int
-        Number of detector nodes.
-    num_observables : int
-        Number of logical observables.
-    has_boundary : bool
-        Whether a virtual boundary node is included.
-    observable_flips : ndarray or None, shape (E, num_observables), bool
-        Per directed edge: which logical observables are flipped when
-        this edge's error occurs.  ``None`` when not available.
-    """
-
-    edge_index: np.ndarray
-    edge_error_prob: np.ndarray
-    edge_weight: np.ndarray
-    node_coords: np.ndarray
-    node_is_boundary: np.ndarray
-    num_nodes: int
-    num_detectors: int
-    num_observables: int
-    has_boundary: bool
-    observable_flips: np.ndarray | None = None
-
-    def __post_init__(self) -> None:
-        """Validate tensor shapes and value consistency."""
-        E = self.edge_index.shape[1]
-        if self.edge_index.shape[0] != 2:
-            raise ValueError(
-                f"edge_index must have shape (2, E), got {self.edge_index.shape}"
-            )
-        if self.edge_error_prob.shape != (E,):
-            raise ValueError(
-                f"edge_error_prob length {self.edge_error_prob.shape[0]} != "
-                f"num edges {E}"
-            )
-        if self.edge_weight.shape != (E,):
-            raise ValueError(
-                f"edge_weight length {self.edge_weight.shape[0]} != num edges {E}"
-            )
-        if self.node_is_boundary.shape != (self.num_nodes,):
-            raise ValueError(
-                f"node_is_boundary length {self.node_is_boundary.shape[0]} != "
-                f"num_nodes {self.num_nodes}"
-            )
-        if self.node_coords.shape[0] != self.num_nodes:
-            raise ValueError(
-                f"node_coords rows {self.node_coords.shape[0]} != "
-                f"num_nodes {self.num_nodes}"
-            )
-        expected_nodes = self.num_detectors + (1 if self.has_boundary else 0)
-        if self.num_nodes != expected_nodes:
-            raise ValueError(
-                f"num_nodes {self.num_nodes} != num_detectors "
-                f"{self.num_detectors} + boundary {int(self.has_boundary)}"
-            )
-        if self.observable_flips is not None:
-            if self.observable_flips.shape != (E, self.num_observables):
-                raise ValueError(
-                    f"observable_flips shape {self.observable_flips.shape} != "
-                    f"expected ({E}, {self.num_observables})"
-                )
+EDGE_DIM: int = 5
+"""Edge feature dimensionality: dx, dy, dt, euclidean, chebyshev."""
 
 
-def _observable_flips_from_dem(
-    dem: stim.DetectorErrorModel,
-    num_det: int,
-    boundary_idx: int | None,
-    num_obs: int,
-) -> dict[tuple[int, int], np.ndarray]:
-    """Extract per-edge observable flip masks from a DEM.
+@dataclass(frozen=True, slots=True)
+class CircuitMetadata:
+    """Precomputed per-circuit metadata for the graph builder.
 
-    Iterates flattened DEM error instructions, identifies the graph edge
-    each instruction corresponds to, and records which observables are
-    flipped.  Instructions sharing an edge OR their observable masks.
+    Extracted once from a ``stim.Circuit`` via ``extract_circuit_metadata``
+    and shared read-only across DataLoader workers.
 
     Parameters
     ----------
-    dem : stim.DetectorErrorModel
-        Decomposed detector error model.
-    num_det : int
-        Number of detector nodes.
-    boundary_idx : int or None
-        Index of the collapsed boundary node (``num_det`` when present).
-    num_obs : int
-        Number of logical observables.
-
-    Returns
-    -------
-    dict[tuple[int, int], ndarray]
-        Mapping from canonical undirected edge key ``(min, max)`` to
-        boolean array of shape ``(num_obs,)`` indicating which
-        observables are flipped.
+    detector_coords : ndarray, shape ``(D, 3)``, float64
+        ``(x, y, t)`` coordinates for each detector.
+    distance : int
+        Code distance.
+    rounds : int
+        Number of syndrome measurement rounds.
+    num_detectors : int
+        Total detector count (must equal ``detector_coords.shape[0]``).
     """
-    obs_map: dict[tuple[int, int], np.ndarray] = {}
 
-    for instr in dem.flattened():
-        if str(instr.type) != "error":
-            continue
+    detector_coords: np.ndarray
+    distance: int
+    rounds: int
+    num_detectors: int
 
-        targets = instr.targets_copy()
-        dets = [t.val for t in targets if t.is_relative_detector_id()]
-        obs = [t.val for t in targets if t.is_logical_observable_id()]
-
-        # Determine the edge key.
-        if len(dets) == 2:
-            key = (min(dets[0], dets[1]), max(dets[0], dets[1]))
-        elif len(dets) == 1 and boundary_idx is not None:
-            d = dets[0]
-            key = (min(d, boundary_idx), max(d, boundary_idx))
-        else:
-            # Hyperedge (>2 dets) or isolated observable — skip.
-            continue
-
-        mask = np.zeros(num_obs, dtype=bool)
-        for o in obs:
-            if 0 <= o < num_obs:
-                mask[o] = True
-
-        if key in obs_map:
-            obs_map[key] |= mask
-        else:
-            obs_map[key] = mask
-
-    return obs_map
+    def __post_init__(self) -> None:
+        if self.detector_coords.ndim != 2 or self.detector_coords.shape[1] < 3:
+            raise ValueError(
+                f"detector_coords must have shape (D, >=3), "
+                f"got {self.detector_coords.shape}"
+            )
+        if self.detector_coords.shape[0] != self.num_detectors:
+            raise ValueError(
+                f"detector_coords rows {self.detector_coords.shape[0]} != "
+                f"num_detectors {self.num_detectors}"
+            )
+        if self.distance < 1:
+            raise ValueError(f"distance must be >= 1, got {self.distance}")
+        if self.rounds < 1:
+            raise ValueError(f"rounds must be >= 1, got {self.rounds}")
 
 
-def build_detector_graph(
+@dataclass(frozen=True, slots=True)
+class FiredDetectorGraph:
+    """Fired-detector complete graph with learned features.
+
+    Parameters
+    ----------
+    node_features : ndarray, shape ``(N, 6)``, float32
+        Per-node: ``[x_norm, y_norm, t_norm, d_x, d_y, basis]``.
+        ``x_norm = x / (2d)``, ``y_norm = y / (2d)``, ``t_norm = t / r``.
+        ``d_x = (x - d) / d`` (signed boundary distance, x-axis).
+        ``d_y = (y - d) / d`` (signed boundary distance, y-axis).
+        ``basis`` = stabilizer type flag (0 or 1).
+    edge_index : ndarray, shape ``(2, E)``, int64
+        Directed COO edges for the complete graph (both directions).
+    edge_features : ndarray, shape ``(E, 5)``, float32
+        Per-edge: ``[dx, dy, dt, euclidean, chebyshev]`` where deltas are
+        normalized ``(dst - src)`` and distances are of normalized coords.
+    num_fired : int
+        Number of fired detectors (nodes in the graph).
+    fired_indices : ndarray, shape ``(N,)``, int64
+        Original detector indices that fired.
+    """
+
+    node_features: np.ndarray
+    edge_index: np.ndarray
+    edge_features: np.ndarray
+    num_fired: int
+    fired_indices: np.ndarray
+
+    def __post_init__(self) -> None:
+        N = self.num_fired
+        E = N * (N - 1) if N > 1 else 0
+
+        if self.node_features.shape != (N, NODE_DIM):
+            raise ValueError(
+                f"node_features shape {self.node_features.shape} != "
+                f"expected ({N}, {NODE_DIM})"
+            )
+        if self.edge_index.shape != (2, E):
+            raise ValueError(
+                f"edge_index shape {self.edge_index.shape} != expected (2, {E})"
+            )
+        if self.edge_features.shape != (E, EDGE_DIM):
+            raise ValueError(
+                f"edge_features shape {self.edge_features.shape} != "
+                f"expected ({E}, {EDGE_DIM})"
+            )
+        if self.fired_indices.shape != (N,):
+            raise ValueError(
+                f"fired_indices shape {self.fired_indices.shape} != " f"expected ({N},)"
+            )
+
+
+def extract_circuit_metadata(
     circuit: stim.Circuit,
-    dem: stim.DetectorErrorModel,
-    include_boundary: bool = True,
-) -> DetectorGraph:
-    """
-    Build a detector graph from a Stim circuit and error model.
-
-    Constructs a graph representation suitable for GNN-based decoding by:
-    1. Converting the detector error model to a matching graph
-    2. Collapsing boundary nodes into a single virtual node (optional)
-    3. Extracting node coordinates from circuit
-    4. Creating bidirectional edge representation
-    5. Extracting per-edge observable flip masks from the DEM
+    distance: int,
+    rounds: int,
+) -> CircuitMetadata:
+    """Extract graph builder metadata from a Stim circuit.
 
     Parameters
     ----------
     circuit : stim.Circuit
-        Circuit for detector coordinates.
-    dem : stim.DetectorErrorModel
-        Graphlike detector error model from
-        circuit.detector_error_model(decompose_errors=True).
-    include_boundary : bool, default=True
-        Include virtual boundary node if PyMatching reports boundary edges.
+        Circuit with detector coordinates annotated.
+    distance : int
+        Code distance (used for spatial normalization as ``2 * d``).
+    rounds : int
+        Number of syndrome measurement rounds (temporal normalization).
 
     Returns
     -------
-    DetectorGraph
-        Graph suitable for GNN input with bidirectional edges.
-
-    Raises
-    ------
-    ValueError
-        If detector node IDs are invalid or edge attributes are missing.
-
-    Notes
-    -----
-    The graph is stored in COO (coordinate) format with both directions
-    of each edge explicitly stored (u=>v and v=>u).
-
-    Examples
-    --------
-    >>> circuit = stim.Circuit.generated("surface_code:rotated_memory_x", ...)
-    >>> dem = circuit.detector_error_model(decompose_errors=True)
-    >>> graph = build_detector_graph(circuit, dem)
-    >>> graph.num_nodes
-    42
+    CircuitMetadata
     """
-    num_det = dem.num_detectors
-    num_obs = dem.num_observables
-
-    matching = pymatching.Matching.from_detector_error_model(dem)
-    G: nx.Graph = matching.to_networkx()
-
-    def is_boundary(n: Any) -> bool:
-        """Check if node is marked as boundary in PyMatching graph."""
-        return bool(G.nodes[n].get("is_boundary", False))
-
-    # Validate detector nodes
-    detector_nodes = [n for n in G.nodes if not is_boundary(n)]
-    invalid = [
-        n
-        for n in detector_nodes
-        if not (isinstance(n, (int, np.integer)) and 0 <= n < num_det)
-    ]
-    if invalid:
-        raise ValueError(f"Invalid detector node IDs: {invalid[:5]}")
-
-    boundary_nodes = [n for n in G.nodes if is_boundary(n)]
-    has_boundary = include_boundary and len(boundary_nodes) > 0
-    boundary_idx = num_det if has_boundary else None
-
-    # Map nodes to contiguous indices
-    node_map: dict[Any, int | None] = {}
-    for n in G.nodes:
-        if not is_boundary(n):
-            node_map[n] = int(n)
-        elif has_boundary:
-            node_map[n] = boundary_idx  # Collapse all boundary nodes
-        else:
-            node_map[n] = None
-
-    num_nodes = num_det + (1 if has_boundary else 0)
-
-    # Extract node coordinates from Stim circuit
     coord_dict = circuit.get_detector_coordinates()
-    coord_dim = max((len(v) for v in coord_dict.values()), default=0)
-    node_coords = np.full((num_nodes, coord_dim), np.nan, dtype=np.float32)
-    for det_id, coords in coord_dict.items():
+    num_det = circuit.num_detectors
+
+    coords = np.zeros((num_det, 3), dtype=np.float64)
+    for det_id, c in coord_dict.items():
         if 0 <= det_id < num_det:
-            node_coords[det_id, : len(coords)] = coords
+            coords[det_id, : min(len(c), 3)] = c[:3]
 
-    node_is_boundary = np.zeros(num_nodes, dtype=bool)
-    if has_boundary:
-        node_is_boundary[boundary_idx] = True
-
-    # Deduplicate edges after boundary collapse (keep smallest weight)
-    best: dict[tuple[int, int], tuple[float, float]] = {}
-    for u, v, data in G.edges(data=True):
-        iu, iv = node_map.get(u), node_map.get(v)
-        if iu is None or iv is None or iu == iv:
-            continue
-
-        p = data.get("error_probability")
-        if p is None:
-            raise ValueError("Missing 'error_probability' on edge")
-        w = data.get("weight", np.nan)
-
-        key = (min(iu, iv), max(iu, iv))
-        if key not in best or (
-            not np.isnan(w) and (np.isnan(best[key][1]) or w < best[key][1])
-        ):
-            best[key] = (float(p), float(w))
-
-    # Extract observable flips from DEM
-    obs_map = _observable_flips_from_dem(dem, num_det, boundary_idx, num_obs)
-
-    # Expand to directed COO format (bidirectional)
-    edges, probs, weights, obs_flips = [], [], [], []
-    for (a, b), (p, w) in best.items():
-        edges.extend([(a, b), (b, a)])
-        probs.extend([p, p])
-        weights.extend([w, w])
-        flips = obs_map.get((a, b), np.zeros(num_obs, dtype=bool))
-        obs_flips.extend([flips, flips])
-
-    edge_index = (
-        np.array(edges, dtype=np.int64).T if edges else np.zeros((2, 0), dtype=np.int64)
+    return CircuitMetadata(
+        detector_coords=coords,
+        distance=distance,
+        rounds=rounds,
+        num_detectors=num_det,
     )
 
-    observable_flips: np.ndarray | None = None
-    if num_obs > 0 and edges:
-        observable_flips = np.array(obs_flips, dtype=bool)
-    elif num_obs > 0:
-        observable_flips = np.zeros((0, num_obs), dtype=bool)
 
-    return DetectorGraph(
+_EMPTY_NODE_FEATURES = np.zeros((0, NODE_DIM), dtype=np.float32)
+_EMPTY_EDGE_INDEX = np.zeros((2, 0), dtype=np.int64)
+_EMPTY_EDGE_FEATURES = np.zeros((0, EDGE_DIM), dtype=np.float32)
+_EMPTY_FIRED = np.zeros((0,), dtype=np.int64)
+
+
+def build_fired_detector_graph(
+    syndrome: np.ndarray,
+    metadata: CircuitMetadata,
+) -> FiredDetectorGraph:
+    """Build a fired-detector complete graph from a syndrome vector.
+
+    Parameters
+    ----------
+    syndrome : ndarray, shape ``(D,)``
+        Binary syndrome bit-vector (1 = fired).
+    metadata : CircuitMetadata
+        Precomputed circuit metadata.
+
+    Returns
+    -------
+    FiredDetectorGraph
+        Complete graph over fired detectors with learned features.
+        For empty syndromes (zero fired detectors), returns a graph
+        with ``num_fired=0`` — the caller short-circuits to no-flip.
+    """
+    fired = np.flatnonzero(syndrome)
+    N = len(fired)
+
+    if N == 0:
+        return FiredDetectorGraph(
+            node_features=_EMPTY_NODE_FEATURES,
+            edge_index=_EMPTY_EDGE_INDEX,
+            edge_features=_EMPTY_EDGE_FEATURES,
+            num_fired=0,
+            fired_indices=_EMPTY_FIRED,
+        )
+
+    coords = metadata.detector_coords[fired]  # (N, 3)
+    x = coords[:, 0]
+    y = coords[:, 1]
+    t = coords[:, 2]
+
+    d = metadata.distance
+    r = metadata.rounds
+    spatial_scale = 2.0 * d
+    temporal_scale = float(r)
+
+    # Normalized coordinates
+    x_norm = x / spatial_scale
+    y_norm = y / spatial_scale
+    t_norm = t / temporal_scale
+
+    # Signed boundary distances: -1 at min boundary, +1 at max boundary
+    d_x = (x - d) / d
+    d_y = (y - d) / d
+
+    # Basis flag: distinguishes X-check vs Z-check stabilizers
+    basis = (((x + y) / 2).astype(np.intp) % 2).astype(np.float32)
+
+    node_features = np.column_stack([x_norm, y_norm, t_norm, d_x, d_y, basis]).astype(
+        np.float32
+    )
+
+    if N == 1:
+        return FiredDetectorGraph(
+            node_features=node_features,
+            edge_index=np.zeros((2, 0), dtype=np.int64),
+            edge_features=np.zeros((0, EDGE_DIM), dtype=np.float32),
+            num_fired=1,
+            fired_indices=fired.astype(np.int64),
+        )
+
+    # Complete graph edges via broadcasting (vectorized, no Python loop)
+    idx = np.arange(N, dtype=np.int64)
+    all_src = np.repeat(idx, N)  # (N*N,)
+    all_dst = np.tile(idx, N)  # (N*N,)
+    not_self = all_src != all_dst  # mask out diagonal
+    src = all_src[not_self]  # (N*(N-1),)
+    dst = all_dst[not_self]  # (N*(N-1),)
+    edge_index = np.stack([src, dst], axis=0)
+
+    # Edge features from normalized coordinates (vectorized)
+    norm_coords = node_features[:, :3]  # (N, 3): x_norm, y_norm, t_norm
+    src_coords = norm_coords[src]  # (E, 3)
+    dst_coords = norm_coords[dst]  # (E, 3)
+    delta = dst_coords - src_coords  # (E, 3): signed (dx, dy, dt)
+
+    abs_delta = np.abs(delta)
+    euclidean = np.sqrt((delta**2).sum(axis=1))
+    chebyshev = abs_delta.max(axis=1)
+
+    edge_features = np.column_stack([delta, euclidean, chebyshev]).astype(np.float32)
+
+    return FiredDetectorGraph(
+        node_features=node_features,
         edge_index=edge_index,
-        edge_error_prob=np.array(probs, dtype=np.float32),
-        edge_weight=np.array(weights, dtype=np.float32),
-        node_coords=node_coords,
-        node_is_boundary=node_is_boundary,
-        num_nodes=num_nodes,
-        num_detectors=num_det,
-        num_observables=num_obs,
-        has_boundary=has_boundary,
-        observable_flips=observable_flips,
+        edge_features=edge_features,
+        num_fired=N,
+        fired_indices=fired.astype(np.int64),
     )
