@@ -1,11 +1,9 @@
 # GNN Training Configuration
 # ==========================
 
-# Training case: "direct" or "edge"
-case: "direct"
-
 # Compute backend: "pytorch" or "compiled" for training.
 # "cuda" is inference-only (custom kernels lack autograd backward).
+# "compiled" uses torch.compile for kernel fusion (~2x throughput, GPU-only).
 backend: "pytorch"
 
 # torch.compile mode (only used when backend is "compiled").
@@ -14,8 +12,12 @@ backend: "pytorch"
 #   every new batch shape (GNN batches have variable N/E) => avoid.
 compile_mode: "default"
 
+# Mixed precision autocast dtype: "bfloat16" (recommended, Ampere+) or
+# "float16".  Model weights and optimizer stay in float32 regardless.
+amp_dtype: "bfloat16"
+
 # Data paths
-datasets_dir: "./data/datasets"
+circuit_dir: "./data/circuits"
 output_dir: "./outputs/runs"
 
 # Model architecture
@@ -28,23 +30,34 @@ model:
 optimisation:
   lr: 1.5e-4
   weight_decay: 1.0e-5
-  epochs: 750
   batch_size: 128
+
+# Sample budget: training halts after this many samples consumed.
+sample_budget: 10_000_000
+
+# Validate every this many training samples consumed.
+val_interval_samples: 100_000
+
+# Frozen validation set size (pre-sampled once at training start).
+val_size: 10_000
+
+# Fraction of sample budget for LR warmup (linear ramp).
+warmup_fraction: 0.05
+
+# Attach physical error probability as a graph-level feature.
+include_p_feature: false
 
 # Data loading
 num_workers: 4
 
-# Sample cap for fast iteration (null = use all data)
-max_samples: null
-
 # Gradient clipping
 max_grad_norm: 1.0
 
-# Early stopping: patience counts validation runs, not epochs.
-# With val_every: 5 and patience: 75, the model must improve within 375 epochs.
+# Early stopping: patience counts validation checks, not epochs.
+# With val_interval_samples: 100_000 and patience: 10,
+# training stops after 1_000_000 samples without improvement.
 # Set patience to 0 to disable early stopping.
-patience: 75
-val_every: 5
+patience: 10
 
 # Reproducibility
 seed: 42

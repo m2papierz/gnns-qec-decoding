@@ -5,26 +5,28 @@ Examples
     # Train from config (recommended)
     uv run scripts/train_gnn.py -c configs/train.yaml
 
-    # Override case and epochs
-    uv run scripts/train_gnn.py -c configs/train.yaml --case edge --epochs 50
+    # d=3 sanity run
+    uv run scripts/train_gnn.py -c configs/train_d3.yaml
+
+    # Override distances and budget
+    uv run scripts/train_gnn.py -c configs/train.yaml --distances 3 --sample-budget 2000000
 
     # Resume from checkpoint
     uv run scripts/train_gnn.py -c configs/train.yaml --resume outputs/runs/direct/best.pt
 """
 
+from __future__ import annotations
+
 import argparse
 import logging
-from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
-from cli import setup_logging
 from gnn.trainer import TrainConfig, Trainer
 
 
 def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
-    """
-    Parse command-line arguments into a :class:`TrainConfig`.
+    """Parse CLI arguments into a :class:`TrainConfig`.
 
     CLI args override values loaded from YAML config.
     """
@@ -41,45 +43,46 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
         help="YAML config file (CLI args override config values)",
     )
     parser.add_argument(
-        "--case",
-        type=str,
-        default=None,
-        choices=["direct", "edge"],
-    )
-    parser.add_argument(
         "--backend",
         type=str,
         default=None,
-        choices=["pytorch", "compiled", "cuda"],
-        help="Compute backend (overrides config)",
+        choices=["pytorch", "compiled"],
+        help="Compute backend (cuda is inference-only)",
     )
-    parser.add_argument(
-        "--compile-mode",
-        type=str,
-        default=None,
-        help="torch.compile mode (only used with --backend compiled)",
-    )
-    parser.add_argument("--datasets-dir", type=Path, default=None)
+    parser.add_argument("--compile-mode", type=str, default=None)
+    parser.add_argument("--circuit-dir", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--hidden-dim", type=int, default=None)
     parser.add_argument("--num-layers", type=int, default=None)
     parser.add_argument("--dropout", type=float, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--weight-decay", type=float, default=None)
-    parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=None)
-    parser.add_argument("--edge-pos-weight", type=float, default=None)
     parser.add_argument("--max-grad-norm", type=float, default=None)
     parser.add_argument("--patience", type=int, default=None)
-    parser.add_argument("--val-every", type=int, default=None)
+    parser.add_argument("--sample-budget", type=int, default=None)
+    parser.add_argument("--val-interval-samples", type=int, default=None)
+    parser.add_argument("--val-size", type=int, default=None)
+    parser.add_argument("--warmup-fraction", type=float, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--resume", type=Path, default=None)
-    parser.add_argument("--max-samples", type=int, default=None)
+    parser.add_argument(
+        "--distances",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Train on these code distances only (default: all)",
+    )
+    parser.add_argument("--include-p-feature", action="store_true", default=None)
     parser.add_argument("-v", "--verbose", action="store_true")
 
     args = parser.parse_args(argv)
-    setup_logging(verbose=args.verbose)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
     if args.config is not None and args.config.is_file():
         cfg = TrainConfig.from_yaml(args.config)
@@ -92,37 +95,39 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainConfig:
     else:
         cfg = TrainConfig()
 
-    overrides = {
-        "case": args.case,
-        "datasets_dir": args.datasets_dir,
+    field_map = {
+        "circuit_dir": args.circuit_dir,
         "output_dir": args.output_dir,
         "hidden_dim": args.hidden_dim,
         "num_layers": args.num_layers,
         "dropout": args.dropout,
         "lr": args.lr,
         "weight_decay": args.weight_decay,
-        "epochs": args.epochs,
         "batch_size": args.batch_size,
         "num_workers": args.num_workers,
-        "edge_pos_weight": args.edge_pos_weight,
         "max_grad_norm": args.max_grad_norm,
         "patience": args.patience,
-        "val_every": args.val_every,
+        "sample_budget": args.sample_budget,
+        "val_interval_samples": args.val_interval_samples,
+        "val_size": args.val_size,
+        "warmup_fraction": args.warmup_fraction,
         "seed": args.seed,
         "resume": args.resume,
-        "max_samples": args.max_samples,
         "backend": args.backend,
         "compile_mode": args.compile_mode,
+        "distances": args.distances,
+        "include_p_feature": args.include_p_feature,
     }
 
-    cfg_dict = asdict(cfg)
-    for key, value in overrides.items():
+    cfg_dict = {f.name: getattr(cfg, f.name) for f in cfg.__dataclass_fields__.values()}
+    for key, value in field_map.items():
         if value is not None:
             cfg_dict[key] = value
 
-    for key in ("datasets_dir", "output_dir"):
-        cfg_dict[key] = Path(cfg_dict[key])
-    if cfg_dict["resume"] is not None:
+    for key in ("circuit_dir", "output_dir"):
+        if key in cfg_dict and cfg_dict[key] is not None:
+            cfg_dict[key] = Path(cfg_dict[key])
+    if cfg_dict.get("resume") is not None:
         cfg_dict["resume"] = Path(cfg_dict["resume"])
 
     return TrainConfig(**cfg_dict)

@@ -1,0 +1,53 @@
+# d=3 training — per-distance model
+# ==================================
+# Trains only on d=3 circuits across all 4 error probabilities.
+
+backend: "compiled"
+compile_mode: "default"
+amp_dtype: "bfloat16"
+
+# Data paths
+circuit_dir: "./data/circuits"
+output_dir: "./outputs/d3_full"
+
+# Distance filter: train on d=3 only.
+distances: [3]
+
+# Model architecture (same as full config)
+model:
+  hidden_dim: 128
+  num_layers: 6
+  dropout: 0.1
+
+# Optimisation
+optimisation:
+  lr: 1.5e-4
+  weight_decay: 1.0e-5
+  batch_size: 128
+
+# Sample budget: 2M is ample for d=3 sanity.
+sample_budget: 2_000_000
+
+# Validate every 50k samples for frequent monitoring.
+val_interval_samples: 50_000
+
+# Frozen validation set size.
+val_size: 10_000
+
+# LR warmup fraction.
+warmup_fraction: 0.05
+
+# No p conditioning for per-distance training.
+include_p_feature: false
+
+# Data loading
+num_workers: 4
+
+# Gradient clipping
+max_grad_norm: 1.0
+
+# Early stopping: 15 checks without improvement.
+patience: 15
+
+# Reproducibility
+seed: 42
