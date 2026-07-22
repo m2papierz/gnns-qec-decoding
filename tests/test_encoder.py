@@ -5,6 +5,7 @@ import torch
 from torch_geometric.data import Batch, Data
 
 from gnn.models.encoder import DetectorGraphEncoder
+from qec_generator.graph import EDGE_DIM, NODE_DIM
 
 
 @pytest.fixture
@@ -47,9 +48,9 @@ class TestOutputShapes:
 
     def test_hidden_dim_propagates(self) -> None:
         enc = DetectorGraphEncoder(hidden_dim=64, num_layers=2)
-        x = torch.randn(10, 1)
+        x = torch.randn(10, NODE_DIM)
         ei = torch.randint(0, 10, (2, 20))
-        ea = torch.randn(20, 2)
+        ea = torch.randn(20, EDGE_DIM)
         h, edge_h = enc(x, ei, ea)
         assert h.shape == (10, 64)
         assert edge_h.shape == (20, 64)
@@ -99,9 +100,9 @@ class TestConfiguration:
 
     def test_single_layer(self) -> None:
         enc = DetectorGraphEncoder(num_layers=1, hidden_dim=16)
-        x = torch.randn(4, 1)
+        x = torch.randn(4, NODE_DIM)
         ei = torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long)
-        ea = torch.randn(3, 2)
+        ea = torch.randn(3, EDGE_DIM)
         h, edge_h = enc(x, ei, ea)
         assert h.shape == (4, 16)
         assert edge_h.shape == (3, 16)

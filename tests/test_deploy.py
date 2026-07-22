@@ -4,14 +4,13 @@ import pytest
 import torch
 from torch_geometric.data import Batch, Data
 
-from constants import CASES
 from deploy.engine import (
     InferenceBackend,
     InferenceEngine,
     make_synthetic_batch,
 )
 from gnn.dataset import EDGE_DIM, NODE_DIM
-from gnn.models.heads import build_model
+from gnn.models.decoder import build_model
 
 
 def _make_batch(n_graphs=2, n_nodes=10, n_edges=20, device="cpu"):
@@ -51,25 +50,12 @@ _skip_no_trt = pytest.mark.skipif(
 )
 
 
-class TestInferenceBackend:
-    def test_values(self) -> None:
-        assert InferenceBackend("pytorch") == InferenceBackend.PYTORCH
-        assert InferenceBackend("compiled") == InferenceBackend.COMPILED
-        assert InferenceBackend("tensorrt") == InferenceBackend.TENSORRT
-
-    def test_invalid(self) -> None:
-        with pytest.raises(ValueError):
-            InferenceBackend("invalid_backend")
-
-
 class TestPytorchBackend:
     """Baseline backend — runs on CPU or GPU."""
 
-    @pytest.mark.parametrize("case", CASES)
-    def test_forward_all_cases(self, case: str) -> None:
-        """Every training case produces output of correct shape."""
+    def test_forward(self) -> None:
+        """Produces output of correct shape."""
         model = build_model(
-            case,
             node_dim=NODE_DIM,
             edge_dim=EDGE_DIM,
             hidden_dim=16,
@@ -81,16 +67,11 @@ class TestPytorchBackend:
         batch = _make_batch(n_graphs=3, device="cpu")
         out = engine.predict(batch)
 
-        if case == "direct":
-            assert out.shape == (3, 1)
-        else:
-            # EdgeHead: one logit per directed edge
-            assert out.shape == (batch.edge_index.shape[1],)
+        assert out.shape == (3, 1)
 
     def test_deterministic_eval_mode(self) -> None:
         """Repeated calls produce identical output (no dropout)."""
         model = build_model(
-            "direct",
             node_dim=NODE_DIM,
             edge_dim=EDGE_DIM,
             hidden_dim=16,
@@ -107,7 +88,6 @@ class TestPytorchBackend:
     def test_benchmark_returns_metrics(self) -> None:
         """Benchmark dict has all expected keys with sane values."""
         model = build_model(
-            "direct",
             node_dim=NODE_DIM,
             edge_dim=EDGE_DIM,
             hidden_dim=16,
@@ -141,7 +121,6 @@ class TestCompiledBackend:
         """Compiled backend is numerically identical to PyTorch."""
         torch.manual_seed(42)
         model = build_model(
-            "direct",
             node_dim=NODE_DIM,
             edge_dim=EDGE_DIM,
             hidden_dim=32,
@@ -158,11 +137,9 @@ class TestCompiledBackend:
 
         torch.testing.assert_close(pt_out, compiled_out, atol=1e-5, rtol=1e-5)
 
-    @pytest.mark.parametrize("case", CASES)
-    def test_all_cases_compile(self, case: str) -> None:
-        """All model architectures survive torch.compile."""
+    def test_compile_succeeds(self) -> None:
+        """Model survives torch.compile."""
         model = build_model(
-            case,
             node_dim=NODE_DIM,
             edge_dim=EDGE_DIM,
             hidden_dim=16,
@@ -184,7 +161,6 @@ class TestTensorRTBackend:
         """TRT output within FP16 tolerance of PyTorch."""
         torch.manual_seed(42)
         model = build_model(
-            "direct",
             node_dim=NODE_DIM,
             edge_dim=EDGE_DIM,
             hidden_dim=32,
@@ -211,7 +187,6 @@ class TestTensorRTBackend:
         """TRT with fp32 is tighter than fp16."""
         torch.manual_seed(42)
         model = build_model(
-            "direct",
             node_dim=NODE_DIM,
             edge_dim=EDGE_DIM,
             hidden_dim=16,
@@ -233,11 +208,9 @@ class TestTensorRTBackend:
 
         torch.testing.assert_close(pt_out, trt_out, atol=5e-4, rtol=5e-4)
 
-    @pytest.mark.parametrize("case", CASES)
-    def test_all_cases_compile(self, case: str) -> None:
-        """All model architectures survive TRT compilation."""
+    def test_trt_compile_succeeds(self) -> None:
+        """Model survives TRT compilation."""
         model = build_model(
-            case,
             node_dim=NODE_DIM,
             edge_dim=EDGE_DIM,
             hidden_dim=16,

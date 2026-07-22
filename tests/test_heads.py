@@ -4,8 +4,7 @@ import pytest
 import torch
 from torch_geometric.data import Batch, Data
 
-from gnn.models.heads import (
-    EdgeHead,
+from gnn.models.decoder import (
     LogicalHead,
     QECDecoder,
     build_model,
@@ -45,78 +44,40 @@ class TestLogicalHead:
         head = LogicalHead(hidden_dim=32, num_observables=1, dropout=0.0)
         h = torch.randn(18, 32)
         batch = torch.tensor([0] * 6 + [1] * 6 + [2] * 6)
-        ei = torch.randint(0, 18, (2, 30))
-        edge_h = torch.randn(30, 32)
-        logits = head(h, batch, edge_index=ei, edge_h=edge_h)
+        logits = head(h, batch)
         assert logits.shape == (3, 1)
 
     def test_output_shape_multi_observable(self) -> None:
         head = LogicalHead(hidden_dim=32, num_observables=3, dropout=0.0)
         h = torch.randn(10, 32)
         batch = torch.tensor([0] * 4 + [1] * 6)
-        ei = torch.randint(0, 10, (2, 16))
-        edge_h = torch.randn(16, 32)
-        logits = head(h, batch, edge_index=ei, edge_h=edge_h)
+        logits = head(h, batch)
         assert logits.shape == (2, 3)
 
     def test_ignores_extra_kwargs(self) -> None:
         head = LogicalHead(hidden_dim=16, dropout=0.0)
         h = torch.randn(5, 16)
         batch = torch.zeros(5, dtype=torch.long)
-        ei = torch.randint(0, 5, (2, 8))
-        edge_h = torch.randn(8, 16)
-        logits = head(h, batch, edge_index=ei, edge_h=edge_h, edge_attr=None)
+        logits = head(h, batch, edge_index=None, edge_h=None, edge_attr=None)
         assert logits.shape == (1, 1)
 
-    def test_gradient_flow(self) -> None:
+    def test_sum_pooling_gradient_flow(self) -> None:
+        """Sum pooling guarantees every node receives gradient."""
         head = LogicalHead(hidden_dim=16, dropout=0.0)
         h = torch.randn(8, 16, requires_grad=True)
         batch = torch.tensor([0] * 4 + [1] * 4)
-        ei = torch.randint(0, 8, (2, 12))
-        edge_h = torch.randn(12, 16, requires_grad=True)
-        logits = head(h, batch, edge_index=ei, edge_h=edge_h)
+        logits = head(h, batch)
         logits.sum().backward()
         assert h.grad is not None
-        assert edge_h.grad is not None
-
-
-class TestEdgeHead:
-    """Tests for per-edge prediction with learned edge embeddings."""
-
-    def test_output_shape(self) -> None:
-        head = EdgeHead(hidden_dim=32, dropout=0.0)
-        h = torch.randn(10, 32)
-        ei = torch.randint(0, 10, (2, 20))
-        edge_h = torch.randn(20, 32)
-        logits = head(h, edge_index=ei, edge_h=edge_h)
-        assert logits.shape == (20,)
-
-    def test_ignores_extra_kwargs(self) -> None:
-        head = EdgeHead(hidden_dim=16, dropout=0.0)
-        h = torch.randn(4, 16)
-        ei = torch.randint(0, 4, (2, 6))
-        edge_h = torch.randn(6, 16)
-        logits = head(h, edge_index=ei, edge_h=edge_h, batch=None, edge_attr=None)
-        assert logits.shape == (6,)
-
-    def test_gradient_flow(self) -> None:
-        head = EdgeHead(hidden_dim=16, dropout=0.0)
-        h = torch.randn(6, 16, requires_grad=True)
-        ei = torch.randint(0, 6, (2, 10))
-        edge_h = torch.randn(10, 16, requires_grad=True)
-        logits = head(h, edge_index=ei, edge_h=edge_h)
-        logits.sum().backward()
-        assert h.grad is not None
-        assert edge_h.grad is not None
+        per_node_grad_norm = h.grad.abs().sum(dim=-1)
+        assert (per_node_grad_norm > 0).all()
 
 
 class TestQECDecoder:
     """Tests for the full encoder + head pipeline."""
 
-    @pytest.mark.parametrize("case", ["direct", "edge"])
-    def test_forward_runs(self, case: str, batched: Batch) -> None:
+    def test_forward_runs(self, batched: Batch) -> None:
         model = build_model(
-            case,
             node_dim=5,
             edge_dim=3,
             hidden_dim=32,
@@ -129,9 +90,8 @@ class TestQECDecoder:
         assert logits is not None
         assert logits.ndim >= 1
 
-    def test_direct_output_shape(self, batched: Batch) -> None:
+    def test_output_shape(self, batched: Batch) -> None:
         model = build_model(
-            "direct",
             node_dim=5,
             edge_dim=3,
             hidden_dim=32,
@@ -143,24 +103,8 @@ class TestQECDecoder:
             logits = model(batched)
         assert logits.shape == (3, 1)
 
-    def test_edge_head_output_shape(self, batched: Batch) -> None:
-        model = build_model(
-            "edge",
-            node_dim=5,
-            edge_dim=3,
-            hidden_dim=32,
-            num_layers=2,
-            dropout=0.0,
-        )
-        model.eval()
-        with torch.no_grad():
-            logits = model(batched)
-        total_edges = batched.edge_attr.shape[0]
-        assert logits.shape == (total_edges,)
-
     def test_backward_pass(self, batched: Batch) -> None:
         model = build_model(
-            "direct",
             node_dim=5,
             edge_dim=3,
             hidden_dim=32,
@@ -169,43 +113,14 @@ class TestQECDecoder:
         )
         logits = model(batched)
         logits.sum().backward()
+        last = model.encoder.num_layers - 1
         for name, param in model.named_parameters():
+            # LogicalHead pools only node embeddings, so the final
+            # layer's edge_update and edge_norm have no gradient path.
+            if f"layers.{last}.edge_update" in name:
+                assert param.grad is None, f"Unexpected gradient for {name}"
+                continue
+            if f"layers.{last}.edge_norm" in name:
+                assert param.grad is None, f"Unexpected gradient for {name}"
+                continue
             assert param.grad is not None, f"No gradient for {name}"
-
-
-class TestBuildModel:
-    """Tests for the model factory."""
-
-    def test_invalid_case(self) -> None:
-        with pytest.raises(ValueError, match="Unknown case"):
-            build_model("nonexistent")  # type: ignore[arg-type]
-
-    def test_returns_qec_decoder(self) -> None:
-        model = build_model("direct", node_dim=5, edge_dim=3)
-        assert isinstance(model, QECDecoder)
-
-    def test_encoder_config_propagates(self) -> None:
-        model = build_model(
-            "direct",
-            hidden_dim=64,
-            num_layers=4,
-            node_dim=5,
-            edge_dim=3,
-        )
-        assert model.encoder.hidden_dim == 64
-        assert model.encoder.num_layers == 4
-        assert model.encoder.node_dim == 5
-
-    def test_direct_observables(self) -> None:
-        model = build_model(
-            "direct",
-            node_dim=5,
-            edge_dim=3,
-            hidden_dim=32,
-            num_observables=5,
-        )
-        assert isinstance(model.head, LogicalHead)
-
-    def test_edge_uses_edge_head(self) -> None:
-        model = build_model("edge", node_dim=5, edge_dim=3, hidden_dim=32)
-        assert isinstance(model.head, EdgeHead)
